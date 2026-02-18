@@ -1,8 +1,0 @@
-/Users/abinayadinesh/Documents/projects/reachy-mini/frame-bucket/target/debug/deps/rdkafka_sys-0465318e5c60790d.d: /Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rdkafka-sys-4.10.0+2.12.1/src/lib.rs /Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rdkafka-sys-4.10.0+2.12.1/src/bindings.rs /Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rdkafka-sys-4.10.0+2.12.1/src/helpers.rs /Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rdkafka-sys-4.10.0+2.12.1/src/types.rs
-
-/Users/abinayadinesh/Documents/projects/reachy-mini/frame-bucket/target/debug/deps/librdkafka_sys-0465318e5c60790d.rmeta: /Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rdkafka-sys-4.10.0+2.12.1/src/lib.rs /Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rdkafka-sys-4.10.0+2.12.1/src/bindings.rs /Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rdkafka-sys-4.10.0+2.12.1/src/helpers.rs /Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rdkafka-sys-4.10.0+2.12.1/src/types.rs
-
-/Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rdkafka-sys-4.10.0+2.12.1/src/lib.rs:
-/Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rdkafka-sys-4.10.0+2.12.1/src/bindings.rs:
-/Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rdkafka-sys-4.10.0+2.12.1/src/helpers.rs:
-/Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rdkafka-sys-4.10.0+2.12.1/src/types.rs:
