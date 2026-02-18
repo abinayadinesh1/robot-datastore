@@ -31,7 +31,7 @@ pub fn create_producer(
 ) -> Result<FutureProducer, ProducerError> {
     let producer: FutureProducer = ClientConfig::new()
         .set("bootstrap.servers", brokers)
-        .set("message.max.bytes", "131072")
+        .set("message.max.bytes", "1048576")
         .set("compression.type", compression)
         .set("linger.ms", "5")
         .set("batch.num.messages", "10")

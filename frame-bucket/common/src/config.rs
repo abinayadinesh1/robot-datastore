@@ -136,7 +136,7 @@ fn default_filter_primary() -> String {
     "phash".into()
 }
 fn default_phash_threshold() -> u32 {
-    10
+    26
 }
 fn default_phash_hash_size() -> u32 {
     16
