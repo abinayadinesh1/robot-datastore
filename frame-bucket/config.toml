@@ -12,7 +12,7 @@ mode = "mjpeg"   # "mjpeg" or "polling"
 
 [filter]
 primary = "phash"
-phash_threshold = 0        # hamming distance (out of 256 bits) - 26, ~10% difference
+phash_threshold = 26        # hamming distance (out of 256 bits) - 26, ~10% difference
 phash_hash_size = 16
 histogram_threshold = 0.15  # chi-squared distance
 
