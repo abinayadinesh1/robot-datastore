@@ -1,0 +1,9 @@
+/Users/abinayadinesh/Documents/projects/reachy-mini/frame-bucket/target/debug/deps/xmlparser-940975a9074e9c31.d: /Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/xmlparser-0.13.6/src/lib.rs /Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/xmlparser-0.13.6/src/error.rs /Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/xmlparser-0.13.6/src/stream.rs /Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/xmlparser-0.13.6/src/strspan.rs /Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/xmlparser-0.13.6/src/xmlchar.rs
+
+/Users/abinayadinesh/Documents/projects/reachy-mini/frame-bucket/target/debug/deps/libxmlparser-940975a9074e9c31.rmeta: /Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/xmlparser-0.13.6/src/lib.rs /Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/xmlparser-0.13.6/src/error.rs /Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/xmlparser-0.13.6/src/stream.rs /Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/xmlparser-0.13.6/src/strspan.rs /Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/xmlparser-0.13.6/src/xmlchar.rs
+
+/Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/xmlparser-0.13.6/src/lib.rs:
+/Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/xmlparser-0.13.6/src/error.rs:
+/Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/xmlparser-0.13.6/src/stream.rs:
+/Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/xmlparser-0.13.6/src/strspan.rs:
+/Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/xmlparser-0.13.6/src/xmlchar.rs:

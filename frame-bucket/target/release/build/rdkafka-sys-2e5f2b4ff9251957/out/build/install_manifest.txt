@@ -1,0 +1,13 @@
+/Users/abinayadinesh/Documents/projects/reachy-mini/frame-bucket/target/release/build/rdkafka-sys-2e5f2b4ff9251957/out/lib/cmake/RdKafka/RdKafkaConfig.cmake
+/Users/abinayadinesh/Documents/projects/reachy-mini/frame-bucket/target/release/build/rdkafka-sys-2e5f2b4ff9251957/out/lib/cmake/RdKafka/RdKafkaConfigVersion.cmake
+/Users/abinayadinesh/Documents/projects/reachy-mini/frame-bucket/target/release/build/rdkafka-sys-2e5f2b4ff9251957/out/lib/cmake/RdKafka/FindLZ4.cmake
+/Users/abinayadinesh/Documents/projects/reachy-mini/frame-bucket/target/release/build/rdkafka-sys-2e5f2b4ff9251957/out/lib/cmake/RdKafka/RdKafkaTargets.cmake
+/Users/abinayadinesh/Documents/projects/reachy-mini/frame-bucket/target/release/build/rdkafka-sys-2e5f2b4ff9251957/out/lib/cmake/RdKafka/RdKafkaTargets-release.cmake
+/Users/abinayadinesh/Documents/projects/reachy-mini/frame-bucket/target/release/build/rdkafka-sys-2e5f2b4ff9251957/out/share/licenses/librdkafka/LICENSES.txt
+/Users/abinayadinesh/Documents/projects/reachy-mini/frame-bucket/target/release/build/rdkafka-sys-2e5f2b4ff9251957/out/lib/pkgconfig/rdkafka-static.pc
+/Users/abinayadinesh/Documents/projects/reachy-mini/frame-bucket/target/release/build/rdkafka-sys-2e5f2b4ff9251957/out/lib/librdkafka.a
+/Users/abinayadinesh/Documents/projects/reachy-mini/frame-bucket/target/release/build/rdkafka-sys-2e5f2b4ff9251957/out/include/librdkafka/rdkafka.h
+/Users/abinayadinesh/Documents/projects/reachy-mini/frame-bucket/target/release/build/rdkafka-sys-2e5f2b4ff9251957/out/include/librdkafka/rdkafka_mock.h
+/Users/abinayadinesh/Documents/projects/reachy-mini/frame-bucket/target/release/build/rdkafka-sys-2e5f2b4ff9251957/out/lib/pkgconfig/rdkafka++-static.pc
+/Users/abinayadinesh/Documents/projects/reachy-mini/frame-bucket/target/release/build/rdkafka-sys-2e5f2b4ff9251957/out/lib/librdkafka++.a
+/Users/abinayadinesh/Documents/projects/reachy-mini/frame-bucket/target/release/build/rdkafka-sys-2e5f2b4ff9251957/out/include/librdkafka/rdkafkacpp.h

@@ -1,0 +1,9 @@
+/Users/abinayadinesh/Documents/projects/reachy-mini/frame-bucket/target/debug/deps/aws_smithy_xml-d43bf044e7d3f37a.d: /Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/aws-smithy-xml-0.60.14/src/lib.rs /Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/aws-smithy-xml-0.60.14/src/decode.rs /Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/aws-smithy-xml-0.60.14/src/encode.rs /Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/aws-smithy-xml-0.60.14/src/escape.rs /Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/aws-smithy-xml-0.60.14/src/unescape.rs
+
+/Users/abinayadinesh/Documents/projects/reachy-mini/frame-bucket/target/debug/deps/libaws_smithy_xml-d43bf044e7d3f37a.rmeta: /Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/aws-smithy-xml-0.60.14/src/lib.rs /Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/aws-smithy-xml-0.60.14/src/decode.rs /Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/aws-smithy-xml-0.60.14/src/encode.rs /Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/aws-smithy-xml-0.60.14/src/escape.rs /Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/aws-smithy-xml-0.60.14/src/unescape.rs
+
+/Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/aws-smithy-xml-0.60.14/src/lib.rs:
+/Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/aws-smithy-xml-0.60.14/src/decode.rs:
+/Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/aws-smithy-xml-0.60.14/src/encode.rs:
+/Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/aws-smithy-xml-0.60.14/src/escape.rs:
+/Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/aws-smithy-xml-0.60.14/src/unescape.rs:

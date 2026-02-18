@@ -1,0 +1,11 @@
+/Users/abinayadinesh/Documents/projects/reachy-mini/frame-bucket/target/debug/deps/ecdsa-0b582bc1fa150a5b.d: /Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ecdsa-0.14.8/src/lib.rs /Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ecdsa-0.14.8/src/recovery.rs /Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ecdsa-0.14.8/src/der.rs /Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ecdsa-0.14.8/src/hazmat.rs /Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ecdsa-0.14.8/src/sign.rs /Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ecdsa-0.14.8/src/verify.rs /Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ecdsa-0.14.8/src/../README.md
+
+/Users/abinayadinesh/Documents/projects/reachy-mini/frame-bucket/target/debug/deps/libecdsa-0b582bc1fa150a5b.rmeta: /Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ecdsa-0.14.8/src/lib.rs /Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ecdsa-0.14.8/src/recovery.rs /Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ecdsa-0.14.8/src/der.rs /Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ecdsa-0.14.8/src/hazmat.rs /Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ecdsa-0.14.8/src/sign.rs /Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ecdsa-0.14.8/src/verify.rs /Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ecdsa-0.14.8/src/../README.md
+
+/Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ecdsa-0.14.8/src/lib.rs:
+/Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ecdsa-0.14.8/src/recovery.rs:
+/Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ecdsa-0.14.8/src/der.rs:
+/Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ecdsa-0.14.8/src/hazmat.rs:
+/Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ecdsa-0.14.8/src/sign.rs:
+/Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ecdsa-0.14.8/src/verify.rs:
+/Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ecdsa-0.14.8/src/../README.md:

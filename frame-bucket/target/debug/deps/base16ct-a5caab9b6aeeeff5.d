@@ -1,0 +1,10 @@
+/Users/abinayadinesh/Documents/projects/reachy-mini/frame-bucket/target/debug/deps/base16ct-a5caab9b6aeeeff5.d: /Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/base16ct-0.1.1/src/lib.rs /Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/base16ct-0.1.1/src/lower.rs /Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/base16ct-0.1.1/src/mixed.rs /Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/base16ct-0.1.1/src/upper.rs /Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/base16ct-0.1.1/src/display.rs /Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/base16ct-0.1.1/src/error.rs
+
+/Users/abinayadinesh/Documents/projects/reachy-mini/frame-bucket/target/debug/deps/libbase16ct-a5caab9b6aeeeff5.rmeta: /Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/base16ct-0.1.1/src/lib.rs /Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/base16ct-0.1.1/src/lower.rs /Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/base16ct-0.1.1/src/mixed.rs /Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/base16ct-0.1.1/src/upper.rs /Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/base16ct-0.1.1/src/display.rs /Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/base16ct-0.1.1/src/error.rs
+
+/Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/base16ct-0.1.1/src/lib.rs:
+/Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/base16ct-0.1.1/src/lower.rs:
+/Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/base16ct-0.1.1/src/mixed.rs:
+/Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/base16ct-0.1.1/src/upper.rs:
+/Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/base16ct-0.1.1/src/display.rs:
+/Users/abinayadinesh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/base16ct-0.1.1/src/error.rs:

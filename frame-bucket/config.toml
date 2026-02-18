@@ -1,0 +1,39 @@
+[kafka]
+brokers = "abinaya-desktop:9092"
+topic = "camera.frames"
+group_id = "frame-filter-group"
+compression = "snappy"
+
+[stream]
+url = "http://localhost:8000/api/camera/stream"
+quality = 80
+fps = 10.0
+mode = "mjpeg"   # "mjpeg" or "polling"
+
+[filter]
+primary = "phash"
+phash_threshold = 10        # hamming distance (out of 256 bits)
+phash_hash_size = 16
+histogram_threshold = 0.15  # chi-squared distance
+
+[rustfs]
+endpoint = "http://localhost:9000"
+access_key = "rustfsadmin"
+secret_key = "rustfsadmin"
+bucket = "camera-frames"
+prefix = "frames/"
+
+[eviction]
+check_interval_secs = 30
+threshold_percent = 80.0
+target_percent = 70.0
+batch_size = 50
+
+[aws_s3]
+bucket = "reachy-mini-frames-archive"
+prefix = "archive/"
+robot_id = "reachy-001"
+region = "us-west-2"
+
+[logging]
+level = "info"

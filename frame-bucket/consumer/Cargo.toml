@@ -1,0 +1,22 @@
+[package]
+name = "frame-bucket-consumer"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+frame-bucket-common = { path = "../common" }
+tokio = { version = "1", features = ["full"] }
+rdkafka = { version = "0.36", features = ["tokio", "cmake-build"] }
+aws-sdk-s3 = "1"
+aws-config = { version = "1", features = ["behavior-version-latest"] }
+aws-credential-types = "1"
+aws-types = "1"
+image = "0.25"
+sysinfo = "0.32"
+bytes = "1"
+futures-util = "0.3"
+chrono = "0.4"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+thiserror = "2"
+aws-smithy-types = "1"

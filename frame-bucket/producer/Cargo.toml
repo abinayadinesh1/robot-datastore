@@ -1,0 +1,16 @@
+[package]
+name = "frame-bucket-producer"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+frame-bucket-common = { path = "../common" }
+tokio = { version = "1", features = ["full"] }
+rdkafka = { version = "0.36", features = ["tokio", "cmake-build"] }
+reqwest = { version = "0.12", features = ["stream", "rustls-tls"], default-features = false }
+bytes = "1"
+futures-util = "0.3"
+chrono = "0.4"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+thiserror = "2"
