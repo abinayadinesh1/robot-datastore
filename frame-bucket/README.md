@@ -61,18 +61,26 @@ frame-bucket/
 
 ## Where Are Frames Stored?
 
-Frames are stored in RustFS (S3-compatible, running at `localhost:9000`) in the bucket `camera-frames`, organized by robot ID and date:
+Frames are stored in RustFS (S3-compatible, running at `localhost:9000`) in the bucket `camera-frames`, organized by robot ID, modality, and date:
 
 ```
-s3://camera-frames/frames/{robot_id}/{YYYY-MM-DD}/{YYYYMMDD}T{HHMMSS}{ms}Z_{seq:06}.jpg
+s3://camera-frames/{robot_id}/camera/{YYYY-MM-DD}/{YYYYMMDD}T{HHMMSS}{ms}Z_{seq:06}.jpg
 ```
 
 Example with two robots:
 ```
-frames/reachy-001/2026-02-18/20260218T093616735Z_000008.jpg
-frames/reachy-001/2026-02-18/20260218T093617030Z_000010.jpg
-frames/bracketbot-001/2026-02-18/20260218T093616882Z_000009.jpg
+reachy-001/camera/2026-02-18/20260218T093616735Z_000008.jpg
+reachy-001/camera/2026-02-18/20260218T093617030Z_000010.jpg
+bracketbot-001/camera/2026-02-18/20260218T093616882Z_000009.jpg
 ```
+
+AWS S3 archives mirror this structure under the configured prefix:
+```
+archive/reachy-001/camera/2026-02-18/20260218T093616735Z_000008.jpg
+archive/bracketbot-001/camera/2026-02-18/20260218T093616882Z_000009.jpg
+```
+
+The robot-first hierarchy means you can efficiently list all data for a robot across all modalities with a single prefix query (`reachy-001/`), or narrow to a specific sensor (`reachy-001/camera/`).
 
 You can browse stored frames at the RustFS console: **http://localhost:9001** (login: `rustfsadmin` / `rustfsadmin`).
 
@@ -174,9 +182,9 @@ Buckets: ['camera-frames']
 Objects in camera-frames: 50
 Total size: 9,305,750 bytes (8.87 MB)
 
-  frames/reachy-001/2026-02-18/20260218T093616735Z_000008.jpg  (187,721 bytes)
-  frames/reachy-001/2026-02-18/20260218T093616882Z_000009.jpg  (187,307 bytes)
-  frames/bracketbot-001/2026-02-18/20260218T093617030Z_000010.jpg  (185,412 bytes)
+  reachy-001/camera/2026-02-18/20260218T093616735Z_000008.jpg  (187,721 bytes)
+  reachy-001/camera/2026-02-18/20260218T093616882Z_000009.jpg  (187,307 bytes)
+  bracketbot-001/camera/2026-02-18/20260218T093617030Z_000010.jpg  (185,412 bytes)
   ...
 ```
 
@@ -185,7 +193,7 @@ Total size: 9,305,750 bytes (8.87 MB)
 ```bash
 # Download a single frame via AWS CLI
 aws --endpoint-url http://localhost:9000 s3 cp \
-  s3://camera-frames/frames/reachy-001/2026-02-18/20260218T093616735Z_000008.jpg \
+  s3://camera-frames/reachy-001/camera/2026-02-18/20260218T093616735Z_000008.jpg \
   ./sample.jpg
 
 open ./sample.jpg        # macOS
@@ -195,8 +203,14 @@ open ./sample.jpg        # macOS
 ### Download all frames for a robot
 
 ```bash
+# All camera frames for one robot
 aws --endpoint-url http://localhost:9000 s3 sync \
-  s3://camera-frames/frames/reachy-001/ \
+  s3://camera-frames/reachy-001/camera/ \
+  ./downloaded-frames/reachy-001/camera/
+
+# All modalities for one robot
+aws --endpoint-url http://localhost:9000 s3 sync \
+  s3://camera-frames/reachy-001/ \
   ./downloaded-frames/reachy-001/
 ```
 
@@ -221,6 +235,39 @@ Hamming distance: 31 / 256  (12.1%)
 ```
 
 If the distance is above your configured threshold (26), the consumer would accept both frames as distinct. If below, the second frame would be filtered out as redundant.
+
+## AWS Credentials (for S3 archival)
+
+The consumer's eviction task uploads old frames to AWS S3 when local disk exceeds the threshold. It uses the standard AWS credential chain — no credentials are stored in `config.toml`.
+
+### Setup
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env` with your credentials:
+
+```bash
+AWS_ACCESS_KEY_ID=your_access_key_here
+AWS_SECRET_ACCESS_KEY=your_secret_key_here
+AWS_DEFAULT_REGION=us-west-2
+```
+
+`.env` is gitignored. Source it before running the consumer:
+
+```bash
+source .env
+RUST_LOG=info ./target/release/frame-bucket-consumer
+```
+
+Or inline:
+
+```bash
+AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... ./target/release/frame-bucket-consumer
+```
+
+If no credentials are available, S3 uploads will fail (logged as errors) but the consumer keeps running — frames stay in RustFS and eviction is skipped.
 
 ## Stopping
 

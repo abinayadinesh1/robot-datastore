@@ -149,8 +149,8 @@ async fn run_consumer_loop(
                 .unwrap_or(false);
 
                 if should_store {
-                    // Build per-robot prefix: e.g. "frames/reachy-001/"
-                    let robot_prefix = format!("{}{}/", prefix, robot_id);
+                    // Build per-robot prefix: e.g. "reachy-001/camera/"
+                    let robot_prefix = format!("{}/{}", robot_id, prefix);
                     let object_key = frame.object_key(&robot_prefix);
                     match storage
                         .put_frame(&object_key, frame.jpeg_data, frame.captured_at_ms)

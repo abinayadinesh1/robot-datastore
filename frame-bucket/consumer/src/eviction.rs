@@ -1,4 +1,5 @@
 use aws_sdk_s3::primitives::ByteStream;
+use aws_sdk_s3::types::{BucketLocationConstraint, CreateBucketConfiguration};
 use aws_types::region::Region;
 use frame_bucket_common::config::{AwsS3Config, EvictionConfig};
 use std::sync::Arc;
@@ -15,6 +16,7 @@ pub async fn run_eviction_loop(
     aws_config: &AwsS3Config,
 ) {
     let aws_s3_client = create_aws_s3_client(aws_config).await;
+    ensure_aws_bucket(&aws_s3_client, aws_config).await;
     let interval = Duration::from_secs(eviction_config.check_interval_secs);
     let mut consecutive_failures: u32 = 0;
 
@@ -79,11 +81,9 @@ async fn evict_batch(
             .await
             .map_err(|e| EvictionError::Download(e.to_string()))?;
 
-        // Upload to AWS S3
-        let aws_key = format!(
-            "{}{}/{}",
-            aws_config.prefix, aws_config.robot_id, entry.key
-        );
+        // Upload to AWS S3 — mirror RustFS path under the archive prefix
+        // entry.key is already "{robot_id}/{modality}/{date}/{ts}_{seq}.jpg"
+        let aws_key = format!("{}{}", aws_config.prefix, entry.key);
 
         let put_result = aws_client
             .put_object()
@@ -132,6 +132,44 @@ async fn evict_batch(
     }
 
     Ok(evicted)
+}
+
+/// Ensure the AWS S3 archive bucket exists, creating it if not. Runs once at startup.
+async fn ensure_aws_bucket(client: &aws_sdk_s3::Client, config: &AwsS3Config) {
+    match client.head_bucket().bucket(&config.bucket).send().await {
+        Ok(_) => {
+            info!(bucket = config.bucket, "AWS S3 bucket exists");
+            return;
+        }
+        Err(_) => {
+            info!(bucket = config.bucket, "AWS S3 bucket not found, creating");
+        }
+    }
+
+    // us-east-1 must NOT include a location constraint; all other regions require one.
+    let result = if config.region == "us-east-1" {
+        client.create_bucket().bucket(&config.bucket).send().await
+    } else {
+        let constraint = BucketLocationConstraint::from(config.region.as_str());
+        let cfg = CreateBucketConfiguration::builder()
+            .location_constraint(constraint)
+            .build();
+        client
+            .create_bucket()
+            .bucket(&config.bucket)
+            .create_bucket_configuration(cfg)
+            .send()
+            .await
+    };
+
+    match result {
+        Ok(_) => info!(bucket = config.bucket, region = config.region, "AWS S3 bucket created"),
+        Err(e) => warn!(
+            error = %e,
+            bucket = config.bucket,
+            "failed to create AWS S3 bucket; eviction uploads will fail until it exists"
+        ),
+    }
 }
 
 async fn create_aws_s3_client(config: &AwsS3Config) -> aws_sdk_s3::Client {
