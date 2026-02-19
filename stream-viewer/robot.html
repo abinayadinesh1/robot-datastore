@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Robot Stream</title>
+<link href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,500;0,700;0,800;1,400;1,500&family=IBM+Plex+Mono:wght@300;400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body class="page-robot">
+
+<div class="grid-bg">
+  <div class="grid-canvas">
+    <div class="grid-plane">
+      <div class="grid-vlines"></div>
+      <div class="grid-hlines"></div>
+      <div class="grid-axis-h"></div>
+      <div class="grid-axis-v"></div>
+    </div>
+    <div class="grid-scan"></div>
+  </div>
+  <div class="grid-fade"></div>
+  <div class="grid-topfade"></div>
+</div>
+
+<header>
+  <div class="h-left">
+    <a class="btn-back" href="index.html">
+      <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M9.707 16.707a1 1 0 01-1.414 0l-6-6a1 1 0 010-1.414l6-6a1 1 0 011.414 1.414L5.414 9H17a1 1 0 110 2H5.414l4.293 4.293a1 1 0 010 1.414z" clip-rule="evenodd"/></svg>
+      All Streams
+    </a>
+    <div class="h-sep"></div>
+    <span class="h-label" id="header-label"></span>
+  </div>
+  <div style="display:flex;align-items:center;gap:16px;">
+    <div class="status-indicator">
+      <div class="status-dot" id="status-dot"></div>
+      <span id="status-text">connecting</span>
+    </div>
+  </div>
+</header>
+
+<main>
+  <div>
+    <div class="stream-label" id="main-label"></div>
+    <div class="stream-sublabel" id="fig-sub"></div>
+  </div>
+
+  <div class="stream-box" id="stream-box">
+    <div class="status-overlay" id="status-overlay">
+      <div class="status-cross">
+        <div class="status-cline-h"></div>
+        <div class="status-cline-v"></div>
+      </div>
+      <span class="status-text" id="overlay-text">Acquiring</span>
+    </div>
+    <img id="stream-img" loading="eager" decoding="async" alt="">
+  </div>
+
+  <div class="stream-url-bar" id="url-bar"></div>
+  <div class="fig-label" id="fig-label"></div>
+</main>
+
+<script>
+function getParam(name){
+  return new URLSearchParams(window.location.search).get(name)||'';
+}
+
+const label = getParam('label') || 'Robot Camera';
+const url   = getParam('url');
+
+// populate UI labels
+document.title = label + ' — Stream Viewer';
+document.getElementById('header-label').textContent = label;
+document.getElementById('main-label').textContent   = label;
+document.getElementById('url-bar').textContent      = url;
+document.getElementById('fig-sub').textContent      = 'live feed';
+document.getElementById('stream-img').alt           = label;
+
+const idx = Math.floor(Math.random()*999)+1;
+document.getElementById('fig-label').textContent = `FIG.${String(idx).padStart(3,'0')} — ${label.toUpperCase()}`;
+
+if(!url){
+  document.getElementById('overlay-text').textContent = 'No URL provided';
+  document.getElementById('status-dot').style.background='#a83020';
+  document.getElementById('status-text').textContent='error';
+} else {
+  const img     = document.getElementById('stream-img');
+  const overlay = document.getElementById('status-overlay');
+  const dot     = document.getElementById('status-dot');
+  const stText  = document.getElementById('status-text');
+  const ovText  = document.getElementById('overlay-text');
+
+  let retryDelay=2000, retryTimer=null, countdown=null;
+
+  function setLive(){
+    overlay.style.display='none';
+    dot.style.background='var(--green)'; stText.textContent='live';
+  }
+  function setConnecting(){
+    overlay.style.display='flex';
+    overlay.querySelector('.status-cross').style.animation='rotateCross 3s linear infinite';
+    ovText.textContent='Acquiring';
+    dot.style.background='var(--amber)'; stText.textContent='connecting';
+  }
+  function setError(secs){
+    overlay.style.display='flex';
+    overlay.querySelector('.status-cross').style.animation='none';
+    ovText.textContent=secs>0?`Retry in ${secs}s`:'Reconnecting';
+    dot.style.background='#a83020'; stText.textContent=secs>0?`retry ${secs}s`:'reconnecting';
+  }
+
+  img.onload=()=>{
+    clearTimeout(retryTimer); clearInterval(countdown);
+    retryDelay=2000; setLive();
+  };
+  img.onerror=()=>{
+    clearTimeout(retryTimer); clearInterval(countdown);
+    let secs=Math.round(retryDelay/1000); setError(secs);
+    countdown=setInterval(()=>{
+      secs--;
+      ovText.textContent=secs>0?`Retry in ${secs}s`:'Reconnecting';
+      stText.textContent=secs>0?`retry ${secs}s`:'reconnecting';
+    },1000);
+    retryTimer=setTimeout(()=>{
+      clearInterval(countdown);
+      setConnecting();
+      const sep=url.includes('?')?'&':'?';
+      img.src=url+sep+'_t='+Date.now();
+      retryDelay=Math.min(retryDelay*2,30000);
+    },retryDelay);
+  };
+
+  img.src=url;
+}
+</script>
+</body>
+</html>
