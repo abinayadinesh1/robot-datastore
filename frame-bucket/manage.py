@@ -30,19 +30,22 @@ def _s3_client():
     )
 
 
-def clear_storage():
-    """Delete all frames from the RustFS bucket."""
+def clear_storage(keep=1):
+    """Delete all frames from the RustFS bucket, keeping the N most recent."""
     s3 = _s3_client()
     paginator = s3.get_paginator("list_objects_v2")
-    total = 0
+    all_objects = []
     for page in paginator.paginate(Bucket=BUCKET, Prefix=PREFIX):
-        objects = page.get("Contents", [])
-        if not objects:
-            continue
-        delete_req = {"Objects": [{"Key": obj["Key"]} for obj in objects]}
-        s3.delete_objects(Bucket=BUCKET, Delete=delete_req)
-        total += len(objects)
-    print(f"Deleted {total} objects from s3://{BUCKET}/{PREFIX}")
+        all_objects.extend(page.get("Contents", []))
+    # Sort by key (encodes timestamp) so newest are last
+    all_objects.sort(key=lambda o: o["Key"])
+    to_delete = all_objects[:-keep] if keep > 0 else all_objects
+    total = 0
+    for i in range(0, len(to_delete), 1000):
+        batch = to_delete[i:i + 1000]
+        s3.delete_objects(Bucket=BUCKET, Delete={"Objects": [{"Key": o["Key"]} for o in batch]})
+        total += len(batch)
+    print(f"Deleted {total}, kept {len(all_objects) - total} from s3://{BUCKET}/{PREFIX}")
 
 
 def _is_running(name):
@@ -111,10 +114,24 @@ def list_timestamps():
 
 if __name__ == "__main__":
     hard_reset = "--hard-reset" in sys.argv
-    args = [a for a in sys.argv[1:] if a != "--hard-reset"]
+    # Parse --keep N
+    keep = 1
+    filtered = []
+    skip_next = False
+    for a in sys.argv[1:]:
+        if skip_next:
+            keep = int(a)
+            skip_next = False
+        elif a == "--keep":
+            skip_next = True
+        elif a == "--hard-reset":
+            pass
+        else:
+            filtered.append(a)
+    args = filtered
 
     commands = {
-        "clear": lambda: clear_storage(),
+        "clear": lambda: clear_storage(keep=keep),
         "start-producer": lambda: start_producer(hard_reset),
         "start-consumer": lambda: start_consumer(hard_reset),
         "start": lambda: (start_producer(hard_reset), start_consumer(hard_reset)),

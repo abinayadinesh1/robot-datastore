@@ -21,11 +21,10 @@ pub enum ProducerError {
 
 #[tokio::main]
 async fn main() {
-    let config_path = std::env::args()
-        .nth(1)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("config.toml"));
+    // Optional robot_id override: `frame-bucket-producer [robot_id]`
+    let robot_id_arg = std::env::args().nth(1);
 
+    let config_path = PathBuf::from("config.toml");
     let config = match Config::load(&config_path) {
         Ok(c) => c,
         Err(e) => {
@@ -41,10 +40,13 @@ async fn main() {
         )
         .init();
 
+    let robot_id = robot_id_arg.as_deref().unwrap_or(&config.aws_s3.robot_id);
+
     info!(
         brokers = config.kafka.brokers,
         topic = config.kafka.topic,
         mode = config.stream.mode,
+        robot_id,
         "starting frame-bucket producer"
     );
 
@@ -62,7 +64,7 @@ async fn main() {
                 "{}?quality={}&fps={}",
                 config.stream.url, config.stream.quality, config.stream.fps
             );
-            mjpeg::run_mjpeg_producer(&url, &config.kafka.topic, &producer).await.ok();
+            mjpeg::run_mjpeg_producer(&url, &config.kafka.topic, &producer, robot_id).await.ok();
         }
         "polling" => {
             let url = format!(
@@ -71,7 +73,7 @@ async fn main() {
                 config.stream.quality
             );
             let interval = Duration::from_secs_f64(1.0 / config.stream.fps);
-            mjpeg::run_polling_producer(&url, &config.kafka.topic, &producer, interval)
+            mjpeg::run_polling_producer(&url, &config.kafka.topic, &producer, interval, robot_id)
                 .await
                 .ok();
         }

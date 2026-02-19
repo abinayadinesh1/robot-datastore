@@ -97,6 +97,15 @@ async fn main() {
     run_consumer_loop(consumer, frame_filter, rustfs_storage, &config.rustfs.prefix).await;
 }
 
+/// Extract the robot_id from a Kafka message key of the form `{robot_id}:{timestamp_ms}`.
+/// Falls back to "unknown" if the key is missing or malformed.
+fn robot_id_from_key(key: Option<&[u8]>) -> String {
+    key.and_then(|k| std::str::from_utf8(k).ok())
+        .and_then(|s| s.splitn(2, ':').next())
+        .unwrap_or("unknown")
+        .to_string()
+}
+
 async fn run_consumer_loop(
     consumer: StreamConsumer,
     filter: Arc<Mutex<Box<dyn FrameFilter>>>,
@@ -111,6 +120,8 @@ async fn run_consumer_loop(
     while let Some(result) = stream.next().await {
         match result {
             Ok(msg) => {
+                let robot_id = robot_id_from_key(msg.key());
+
                 let payload = match msg.payload() {
                     Some(p) => p,
                     None => {
@@ -138,7 +149,9 @@ async fn run_consumer_loop(
                 .unwrap_or(false);
 
                 if should_store {
-                    let object_key = frame.object_key(prefix);
+                    // Build per-robot prefix: e.g. "frames/reachy-001/"
+                    let robot_prefix = format!("{}{}/", prefix, robot_id);
+                    let object_key = frame.object_key(&robot_prefix);
                     match storage
                         .put_frame(&object_key, frame.jpeg_data, frame.captured_at_ms)
                         .await
@@ -147,6 +160,7 @@ async fn run_consumer_loop(
                             accepted += 1;
                             debug!(
                                 key = object_key,
+                                robot_id,
                                 accepted,
                                 rejected,
                                 "frame stored"

@@ -48,19 +48,20 @@ pub async fn run_mjpeg_producer(
     stream_url: &str,
     topic: &str,
     producer: &FutureProducer,
+    robot_id: &str,
 ) -> Result<(), ProducerError> {
     let mut backoff = Duration::from_secs(2);
     let max_backoff = Duration::from_secs(30);
 
     loop {
-        info!(url = stream_url, "connecting to MJPEG stream");
-        match consume_stream(stream_url, topic, producer).await {
+        info!(url = stream_url, robot_id, "connecting to MJPEG stream");
+        match consume_stream(stream_url, topic, producer, robot_id).await {
             Ok(()) => {
-                info!("stream ended cleanly, reconnecting");
+                info!(robot_id, "stream ended cleanly, reconnecting");
                 backoff = Duration::from_secs(2);
             }
             Err(e) => {
-                error!(error = %e, "stream error, reconnecting in {:?}", backoff);
+                error!(error = %e, robot_id, "stream error, reconnecting in {:?}", backoff);
             }
         }
         tokio::time::sleep(backoff).await;
@@ -72,11 +73,14 @@ async fn consume_stream(
     url: &str,
     topic: &str,
     producer: &FutureProducer,
+    robot_id: &str,
 ) -> Result<(), ProducerError> {
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .build()
+        .map_err(ProducerError::HttpConnect)?;
     let response = client
         .get(url)
-        .timeout(Duration::from_secs(30))
         .send()
         .await
         .map_err(ProducerError::HttpConnect)?;
@@ -145,7 +149,7 @@ async fn consume_stream(
                             let now_ms = Utc::now().timestamp_millis();
                             let frame = TimestampedFrame::new(jpeg_data, now_ms, seq);
                             let payload = frame.serialize();
-                            let key = format!("{}", now_ms);
+                            let key = format!("{}:{}", robot_id, now_ms);
 
                             debug!(seq, bytes = payload.len(), "producing frame to Kafka");
 
@@ -186,6 +190,7 @@ pub async fn run_polling_producer(
     topic: &str,
     producer: &FutureProducer,
     interval: Duration,
+    robot_id: &str,
 ) -> Result<(), ProducerError> {
     let client = reqwest::Client::new();
     let mut ticker = tokio::time::interval(interval);
@@ -200,7 +205,7 @@ pub async fn run_polling_producer(
                 let now_ms = Utc::now().timestamp_millis();
                 let frame = TimestampedFrame::new(jpeg_data, now_ms, seq);
                 let payload = frame.serialize();
-                let key = format!("{}", now_ms);
+                let key = format!("{}:{}", robot_id, now_ms);
 
                 let record = FutureRecord::to(topic).key(&key).payload(&payload);
                 if let Err((e, _)) = producer.send(record, Duration::from_secs(5)).await {

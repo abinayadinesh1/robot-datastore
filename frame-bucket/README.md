@@ -1,27 +1,44 @@
 # frame-bucket
 
-Kafka-driven camera frame pipeline for Reachy Mini. Captures MJPEG frames from the robot's camera daemon, filters out redundant frames using perceptual hashing, and stores unique frames in RustFS (S3-compatible object storage).
+Kafka-driven camera frame pipeline for streaming, storing, searching, and labelling video data. Captures MJPEG frames from a robot's camera daemon, filters out redundant frames using perceptual hashing, and stores unique frames in RustFS (S3-compatible object storage) in a circular buffer. Data is saved locally until 80% full disk, upon which oldest data is backed up to an S3 bucket.
 
 ## Architecture
 
 ```
-[Camera Daemon :8000]                    [RustFS :9000]        [AWS S3]
-        | MJPEG stream                        ^                    ^
-        v                                     |                    |
-+-- Producer ------+    +-- Consumer ---------+--------------------+
-|                   |    |                                          |
-| Parse MJPEG ->    |    | Filter (aHash) -> Store to RustFS       |
-| Produce to Kafka  |    |                   Monitor disk -> Evict  |
-| "camera.frames"   |    |                   oldest to AWS S3       |
-+-------+-----------+    +----------+------------------------------|
-        |                           |
-        +---- Kafka Topic ----------+
-              "camera.frames"
+[Robot A camera :8000]                   [RustFS :9000]            [AWS S3]
+        | MJPEG stream                         ^                        ^
+        v                                      |                        |
++-- Producer (robot_id="reachy-001") --+       |                        |
+| Parse MJPEG ->                        |       |                        |
+| key="reachy-001:{timestamp_ms}"       |       |                        |
+| Produce to Kafka "camera.frames"      |       |                        |
++-------+-------------------------------+       |                        |
+        |                                       |                        |
+        +---- Kafka "camera.frames" +-----------+                        |
+        |     partition 0: reachy-001 frames    |                        |
+        |     partition 1: bracketbot-001 frames|                        |
+        |                                       |                        |
++-- Producer (robot_id="bracketbot-001") --+   |                        |
+| Parse MJPEG ->                            |   |                        |
+| key="bracketbot-001:{timestamp_ms}"       |   |                        |
+| Produce to Kafka "camera.frames"          |   |                        |
++-------------------------------------------+   |                        |
+                                                |                        |
+        +-- Consumer -------------------------+-+------------------------+
+        |                                     |
+        | Parse robot_id from Kafka key        |
+        | Filter (aHash) ->                    |
+        | Store to RustFS:                     |
+        |   frames/{robot_id}/{date}/{ts}.jpg  |
+        | Monitor disk -> Evict oldest to AWS  |
+        +-------------------------------------+
 ```
 
-**Producer** — connects to the camera's MJPEG stream (or polls single frames), wraps each JPEG in a `TimestampedFrame` (8-byte timestamp + 8-byte seq + JPEG payload), and publishes to Kafka.
+**Producer** — connects to a camera's MJPEG stream (or polls single frames), wraps each JPEG in a `TimestampedFrame` (8-byte timestamp + 8-byte seq + JPEG payload), sets the Kafka message key to `{robot_id}:{timestamp_ms}`, and publishes to the shared `camera.frames` topic.
 
-**Consumer** — reads from Kafka, runs each frame through an aHash perceptual hash filter (16x16 grid = 256 bits, hamming distance comparison), and stores frames that differ enough from the last accepted frame into RustFS. A background eviction task monitors disk usage and archives old frames to AWS S3 when disk exceeds 80%.
+**Kafka partitioning** — the `robot_id` prefix in the message key routes all frames from a given robot to the same partition. This guarantees per-robot ordering (sequence numbers are meaningful) and ensures the perceptual hash filter only compares frames from the same robot — never across robots.
+
+**Consumer** — reads from Kafka, extracts `robot_id` from the message key, runs each frame through an aHash perceptual hash filter (16x16 grid = 256 bits, hamming distance comparison), and stores frames that differ enough from the last accepted frame into RustFS under a per-robot path. A background eviction task monitors disk usage and archives old frames to AWS S3 when disk exceeds 80%.
 
 ## Project Structure
 
@@ -44,16 +61,17 @@ frame-bucket/
 
 ## Where Are Frames Stored?
 
-Frames are stored in RustFS (S3-compatible, running at `localhost:9000`) in the bucket `camera-frames`:
+Frames are stored in RustFS (S3-compatible, running at `localhost:9000`) in the bucket `camera-frames`, organized by robot ID and date:
 
 ```
-s3://camera-frames/frames/{YYYY-MM-DD}/{YYYYMMDD}T{HHMMSS}{ms}Z_{seq:06}.jpg
+s3://camera-frames/frames/{robot_id}/{YYYY-MM-DD}/{YYYYMMDD}T{HHMMSS}{ms}Z_{seq:06}.jpg
 ```
 
-Example:
+Example with two robots:
 ```
-frames/2026-02-18/20260218T093616735Z_000008.jpg
-frames/2026-02-18/20260218T093617030Z_000010.jpg
+frames/reachy-001/2026-02-18/20260218T093616735Z_000008.jpg
+frames/reachy-001/2026-02-18/20260218T093617030Z_000010.jpg
+frames/bracketbot-001/2026-02-18/20260218T093616882Z_000009.jpg
 ```
 
 You can browse stored frames at the RustFS console: **http://localhost:9001** (login: `rustfsadmin` / `rustfsadmin`).
@@ -63,7 +81,7 @@ You can browse stored frames at the RustFS console: **http://localhost:9001** (l
 - Docker & Docker Compose
 - Rust toolchain (`cargo`)
 - Python 3 with `boto3`, `opencv-python`, `numpy` (for helper scripts)
-- Camera daemon running on port 8000 (on the Pi or locally)
+- Camera daemon running on the robot (Reachy: port 8000, BracketBot: port 8003)
 
 ## Running
 
@@ -80,53 +98,95 @@ This starts:
 
 ### 2. Create the Kafka topic (first time only)
 
+Create with enough partitions to accommodate your robot fleet (one partition per robot for maximum parallelism):
+
 ```bash
 docker exec frame-bucket-kafka-1 \
   /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 \
   --create --topic camera.frames --partitions 3
 ```
 
-### 3. Build
+### 3. Install Deps and Build
 
 ```bash
+sudo apt install libcurl4-openssl-dev cmake pkg-config -y
 cargo build --release
 ```
 
-### 4. Run producer and consumer
+### 4. Run producers and consumer
 
-In separate terminals (or background them):
-
-```bash
-# Terminal 1 — producer (connects to camera stream)
-RUST_LOG=info ./target/release/frame-bucket-producer
-
-# Terminal 2 — consumer (filters + stores to RustFS)
-RUST_LOG=info ./target/release/frame-bucket-consumer
-```
-
-Both binaries read `config.toml` from the current directory by default, or pass a path as the first argument:
+Each robot runs its own producer pointed at its camera. All producers publish to the same Kafka topic. One consumer handles all robots.
 
 ```bash
-./target/release/frame-bucket-consumer /path/to/config.toml
+# Robot A producer
+RUST_LOG=info ./target/release/frame-bucket-producer config-reachy.toml
+
+# Robot B producer (separate terminal or machine)
+RUST_LOG=info ./target/release/frame-bucket-producer config-bracketbot.toml
+
+# Consumer (filters + stores to RustFS, handles all robots)
+RUST_LOG=info ./target/release/frame-bucket-consumer config.toml
 ```
+
+Both binaries read `config.toml` from the current directory by default, or accept a path as the first argument.
 
 ## Configuration
 
-Edit `config.toml` to tune behavior. Key settings:
+Edit `config.toml` (or a per-robot variant) to tune behavior. Key settings:
 
 | Setting | Default | Description |
 |---------|---------|-------------|
+| `aws_s3.robot_id` | `"reachy-001"` | Robot identifier. Used as the Kafka partition key prefix and the RustFS path prefix (`frames/{robot_id}/`). Must be unique per robot. |
 | `filter.phash_threshold` | 26 | Hamming distance threshold (out of 256 bits). Higher = stricter filtering. 26 ~ 10% difference. |
 | `filter.phash_hash_size` | 16 | Hash grid size. 16x16 = 256-bit hash. |
-| `stream.mode` | `mjpeg` | `"mjpeg"` for streaming, `"polling"` for single-frame polling |
-| `stream.fps` | 10.0 | Target FPS for stream/poll rate |
-| `eviction.threshold_percent` | 80.0 | Disk usage % that triggers eviction to AWS S3 |
+| `stream.url` | — | Camera stream URL. Reachy: `http://<ip>:8000/api/camera/stream`. BracketBot: `http://<ip>:8003/stream`. |
+| `stream.mode` | `"mjpeg"` | `"mjpeg"` for streaming, `"polling"` for single-frame polling. |
+| `stream.fps` | 10.0 | Target FPS for stream/poll rate. |
+| `eviction.threshold_percent` | 80.0 | Disk usage % that triggers eviction to AWS S3. |
+
+### Per-robot producer config
+
+Create one config file per robot, differing only in `stream.url` and `aws_s3.robot_id`:
+
+```toml
+# config-reachy.toml
+[kafka]
+brokers = "100.81.222.59:9092"
+topic = "camera.frames"
+
+[stream]
+url = "http://100.107.96.29:8000/api/camera/stream"
+quality = 80
+fps = 10.0
+mode = "mjpeg"
+
+[aws_s3]
+robot_id = "reachy-001"   # partition key + storage prefix
+# ... (other fields same as base config)
+```
+
+```toml
+# config-bracketbot.toml
+[kafka]
+brokers = "100.81.222.59:9092"
+topic = "camera.frames"
+
+[stream]
+url = "http://<bracketbot-ip>:8003/stream"
+quality = 80
+fps = 10.0
+mode = "mjpeg"
+
+[aws_s3]
+robot_id = "bracketbot-001"   # partition key + storage prefix
+# ... (other fields same as base config)
+```
 
 ## Verifying Stored Images
 
 ### Browse the RustFS console
 
-Open **http://localhost:9001** in a browser. Log in with `rustfsadmin` / `rustfsadmin`. Navigate to the `camera-frames` bucket to browse and preview stored JPEGs.
+Open **http://localhost:9001** in a browser. Log in with `rustfsadmin` / `rustfsadmin`. Navigate to the `camera-frames` bucket to browse and preview stored JPEGs, organized under `frames/{robot_id}/`.
 
 ### List frames with the helper script
 
@@ -140,8 +200,9 @@ Buckets: ['camera-frames']
 Objects in camera-frames: 50
 Total size: 9,305,750 bytes (8.87 MB)
 
-  frames/2026-02-18/20260218T093616735Z_000008.jpg  (187,721 bytes)
-  frames/2026-02-18/20260218T093616882Z_000009.jpg  (187,307 bytes)
+  frames/reachy-001/2026-02-18/20260218T093616735Z_000008.jpg  (187,721 bytes)
+  frames/reachy-001/2026-02-18/20260218T093616882Z_000009.jpg  (187,307 bytes)
+  frames/bracketbot-001/2026-02-18/20260218T093617030Z_000010.jpg  (185,412 bytes)
   ...
 ```
 
@@ -150,23 +211,20 @@ Total size: 9,305,750 bytes (8.87 MB)
 ```bash
 # Download a single frame via AWS CLI
 aws --endpoint-url http://localhost:9000 s3 cp \
-  s3://camera-frames/frames/2026-02-18/20260218T093616735Z_000008.jpg \
+  s3://camera-frames/frames/reachy-001/2026-02-18/20260218T093616735Z_000008.jpg \
   ./sample.jpg
 
-# Open it
 open ./sample.jpg        # macOS
 # xdg-open ./sample.jpg  # Linux
 ```
 
-### Download all frames for a date
+### Download all frames for a robot
 
 ```bash
 aws --endpoint-url http://localhost:9000 s3 sync \
-  s3://camera-frames/frames/2026-02-18/ \
-  ./downloaded-frames/
+  s3://camera-frames/frames/reachy-001/ \
+  ./downloaded-frames/reachy-001/
 ```
-
-Then open the folder to scroll through images visually.
 
 ### Compare two frames (verify the filter)
 
