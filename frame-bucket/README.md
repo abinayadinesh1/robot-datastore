@@ -90,6 +90,20 @@ You can browse stored frames at the RustFS console: **http://localhost:9001** (l
 - Rust toolchain (`cargo`)
 - Python 3 with `boto3`, `opencv-python`, `numpy` (for helper scripts)
 - Camera daemon running on the robot (Reachy: port 8000, BracketBot: port 8003)
+- **ffmpeg** with libx264/libx265 support (required for ACTIVE mode video encoding):
+
+```bash
+# Ubuntu / Debian (including Jetson)
+sudo apt install ffmpeg
+
+# Verify H.264 and H.265 encoders are available
+ffmpeg -encoders 2>/dev/null | grep -E "libx26[45]"
+# Expected output:
+#  V..... libx264     libx264 H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10
+#  V..... libx265     libx265 H.265 / HEVC
+```
+
+If ffmpeg is missing or encoders are absent, the consumer will log a warning at startup and fall back to IDLE-only mode (no MP4 encoding).
 
 ## Running
 

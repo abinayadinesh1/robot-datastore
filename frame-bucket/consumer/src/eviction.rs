@@ -85,11 +85,17 @@ async fn evict_batch(
         // entry.key is already "{robot_id}/{modality}/{date}/{ts}_{seq}.jpg"
         let aws_key = format!("{}{}", aws_config.prefix, entry.key);
 
+        let content_type = if entry.key.ends_with(".mp4") {
+            "video/mp4"
+        } else {
+            "image/jpeg"
+        };
+
         let put_result = aws_client
             .put_object()
             .bucket(&aws_config.bucket)
             .key(&aws_key)
-            .content_type("image/jpeg")
+            .content_type(content_type)
             .body(ByteStream::from(data))
             .send()
             .await;

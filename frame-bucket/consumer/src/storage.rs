@@ -5,7 +5,7 @@ use frame_bucket_common::config::RustfsConfig;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing::{debug, error, info};
+use tracing::{debug, info};
 
 /// Tracks stored objects for ring-buffer eviction ordering.
 #[derive(Debug)]
@@ -18,6 +18,7 @@ pub struct ObjectEntry {
 pub struct RustfsStorage {
     client: aws_sdk_s3::Client,
     bucket: String,
+    #[allow(dead_code)]
     prefix: String,
     /// Ordered map: captured_at_ms -> stored object metadata.
     pub index: Arc<Mutex<BTreeMap<i64, ObjectEntry>>>,
@@ -75,7 +76,8 @@ impl RustfsStorage {
         }
     }
 
-    /// Store a frame in RustFS. Returns the object key.
+    /// Store a frame in RustFS. Kept for backward compatibility.
+    #[allow(dead_code)]
     pub async fn put_frame(
         &self,
         object_key: &str,
@@ -159,7 +161,92 @@ impl RustfsStorage {
         Ok(())
     }
 
+    /// Store the representative JPEG for an idle period. Indexed for eviction.
+    pub async fn put_idle_frame(
+        &self,
+        object_key: &str,
+        jpeg_data: Vec<u8>,
+        start_ms: i64,
+    ) -> Result<(), StorageError> {
+        let size = jpeg_data.len() as u64;
+
+        self.client
+            .put_object()
+            .bucket(&self.bucket)
+            .key(object_key)
+            .content_type("image/jpeg")
+            .body(ByteStream::from(jpeg_data))
+            .send()
+            .await
+            .map_err(|e| StorageError::PutObject(e.to_string()))?;
+
+        debug!(key = object_key, size, "stored idle frame in RustFS");
+
+        self.index.lock().await.insert(
+            start_ms,
+            ObjectEntry {
+                key: object_key.to_string(),
+                size_bytes: size,
+            },
+        );
+
+        Ok(())
+    }
+
+    /// Store the sidecar JSON for an idle period (timestamp range). Not indexed for eviction.
+    pub async fn put_idle_sidecar(
+        &self,
+        object_key: &str,
+        json_bytes: Vec<u8>,
+    ) -> Result<(), StorageError> {
+        self.client
+            .put_object()
+            .bucket(&self.bucket)
+            .key(object_key)
+            .content_type("application/json")
+            .body(ByteStream::from(json_bytes))
+            .send()
+            .await
+            .map_err(|e| StorageError::PutObject(e.to_string()))?;
+
+        debug!(key = object_key, "stored idle sidecar in RustFS");
+        Ok(())
+    }
+
+    /// Store a completed MP4 video segment. Indexed for eviction.
+    pub async fn put_segment(
+        &self,
+        object_key: &str,
+        mp4_data: Vec<u8>,
+        start_ms: i64,
+    ) -> Result<(), StorageError> {
+        let size = mp4_data.len() as u64;
+
+        self.client
+            .put_object()
+            .bucket(&self.bucket)
+            .key(object_key)
+            .content_type("video/mp4")
+            .body(ByteStream::from(mp4_data))
+            .send()
+            .await
+            .map_err(|e| StorageError::PutObject(e.to_string()))?;
+
+        debug!(key = object_key, size, "stored segment in RustFS");
+
+        self.index.lock().await.insert(
+            start_ms,
+            ObjectEntry {
+                key: object_key.to_string(),
+                size_bytes: size,
+            },
+        );
+
+        Ok(())
+    }
+
     /// Total bytes tracked in the index.
+    #[allow(dead_code)]
     pub async fn total_bytes(&self) -> u64 {
         self.index
             .lock()
@@ -169,10 +256,12 @@ impl RustfsStorage {
             .sum()
     }
 
+    #[allow(dead_code)]
     pub fn client(&self) -> &aws_sdk_s3::Client {
         &self.client
     }
 
+    #[allow(dead_code)]
     pub fn bucket(&self) -> &str {
         &self.bucket
     }

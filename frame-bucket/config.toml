@@ -37,3 +37,19 @@ region = "us-west-2"
 
 [logging]
 level = "info"
+
+[database]
+path = "data/"   # directory where {robot_id}.db SQLite files are created
+
+[api]
+port = 8080
+rustfs_public_url = "http://100.81.222.59:9000"   # URL clients use to reach RustFS
+rustfs_bucket = "camera-frames"
+
+[recording]
+segment_duration_secs = 60
+codec = "h264"       # "h264" or "h265"
+crf = 23             # quality: lower = better, 18-28 is typical range
+preset = "fast"      # encoding speed: ultrafast, superfast, veryfast, faster, fast, medium, slow
+fps = 10.0
+active_to_idle_consecutive_frames = 5  # how many similar frames trigger idle transition

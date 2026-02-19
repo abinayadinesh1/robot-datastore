@@ -11,6 +11,12 @@ pub struct Config {
     pub aws_s3: AwsS3Config,
     #[serde(default)]
     pub logging: LoggingConfig,
+    #[serde(default)]
+    pub recording: RecordingConfig,
+    #[serde(default)]
+    pub database: DatabaseConfig,
+    #[serde(default)]
+    pub api: ApiConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -173,4 +179,95 @@ fn default_region() -> String {
 }
 fn default_log_level() -> String {
     "info".into()
+}
+
+// Recording defaults
+fn default_segment_duration() -> u64 {
+    60
+}
+fn default_codec() -> String {
+    "h264".into()
+}
+fn default_crf() -> u32 {
+    23
+}
+fn default_preset() -> String {
+    "fast".into()
+}
+fn default_recording_fps() -> f64 {
+    10.0
+}
+fn default_active_to_idle() -> u32 {
+    5
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RecordingConfig {
+    #[serde(default = "default_segment_duration")]
+    pub segment_duration_secs: u64,
+    #[serde(default = "default_codec")]
+    pub codec: String,
+    #[serde(default = "default_crf")]
+    pub crf: u32,
+    #[serde(default = "default_preset")]
+    pub preset: String,
+    #[serde(default = "default_recording_fps")]
+    pub fps: f64,
+    #[serde(default = "default_active_to_idle")]
+    pub active_to_idle_consecutive_frames: u32,
+}
+
+fn default_db_path() -> String {
+    "data/".into()
+}
+fn default_api_port() -> u16 {
+    8080
+}
+fn default_rustfs_public_url() -> String {
+    "http://localhost:9000".into()
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct DatabaseConfig {
+    #[serde(default = "default_db_path")]
+    pub path: String,
+}
+
+impl Default for DatabaseConfig {
+    fn default() -> Self {
+        Self { path: default_db_path() }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ApiConfig {
+    #[serde(default = "default_api_port")]
+    pub port: u16,
+    #[serde(default = "default_rustfs_public_url")]
+    pub rustfs_public_url: String,
+    #[serde(default = "default_rustfs_bucket")]
+    pub rustfs_bucket: String,
+}
+
+impl Default for ApiConfig {
+    fn default() -> Self {
+        Self {
+            port: default_api_port(),
+            rustfs_public_url: default_rustfs_public_url(),
+            rustfs_bucket: default_rustfs_bucket(),
+        }
+    }
+}
+
+impl Default for RecordingConfig {
+    fn default() -> Self {
+        Self {
+            segment_duration_secs: default_segment_duration(),
+            codec: default_codec(),
+            crf: default_crf(),
+            preset: default_preset(),
+            fps: default_recording_fps(),
+            active_to_idle_consecutive_frames: default_active_to_idle(),
+        }
+    }
 }

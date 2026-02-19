@@ -1,17 +1,17 @@
+mod db;
 mod eviction;
 mod filter;
+mod recorder;
 mod storage;
 
-use filter::phash::PHashFilter;
-use filter::traits::FrameFilter;
 use frame_bucket_common::config::Config;
 use frame_bucket_common::frame::TimestampedFrame;
 use rdkafka::consumer::{Consumer, StreamConsumer};
 use rdkafka::message::Message;
 use rdkafka::ClientConfig;
+use recorder::RecordingStateMachine;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
 
 #[tokio::main]
@@ -40,10 +40,15 @@ async fn main() {
         brokers = config.kafka.brokers,
         topic = config.kafka.topic,
         group_id = config.kafka.group_id,
-        filter = config.filter.primary,
+        codec = config.recording.codec,
+        segment_secs = config.recording.segment_duration_secs,
+        phash_threshold = config.filter.phash_threshold,
         rustfs_endpoint = config.rustfs.endpoint,
         "starting frame-bucket consumer"
     );
+
+    // Check ffmpeg availability (encoding will fail without it).
+    recorder::encoder::check_ffmpeg_available().await;
 
     // Initialize RustFS storage
     let rustfs_storage = Arc::new(storage::RustfsStorage::new(&config.rustfs).await);
@@ -69,20 +74,30 @@ async fn main() {
 
     info!(topic = config.kafka.topic, "subscribed to Kafka topic");
 
-    // Create filter
-    let frame_filter: Arc<Mutex<Box<dyn FrameFilter>>> = match config.filter.primary.as_str() {
-        "phash" => Arc::new(Mutex::new(Box::new(PHashFilter::new(
-            config.filter.phash_hash_size,
-            config.filter.phash_threshold,
-        )))),
-        "histogram" => Arc::new(Mutex::new(Box::new(
-            filter::histogram::HistogramFilter::new(config.filter.histogram_threshold),
-        ))),
-        other => {
-            error!(filter = other, "unknown filter type");
-            std::process::exit(1);
+    // Open per-robot SQLite database for segment metadata.
+    let robot_id = config.aws_s3.robot_id.clone();
+    let db_dir = std::path::Path::new(&config.database.path);
+    let segment_db = match db::SegmentDb::open(db_dir, &robot_id) {
+        Ok(d) => {
+            info!(path = config.database.path, robot_id, "SQLite segment DB opened");
+            Some(Arc::new(d))
+        }
+        Err(e) => {
+            error!(error = %e, "failed to open SQLite segment DB; metadata will not be persisted");
+            None
         }
     };
+
+    // Build the recording state machine.
+    let state_machine = RecordingStateMachine::new(
+        config.recording.clone(),
+        config.filter.phash_threshold,
+        config.filter.phash_hash_size,
+        Arc::clone(&rustfs_storage),
+        segment_db,
+        config.rustfs.prefix.clone(),
+        robot_id,
+    );
 
     // Spawn eviction background task
     let eviction_storage = Arc::clone(&rustfs_storage);
@@ -94,7 +109,7 @@ async fn main() {
 
     // Main consumption loop
     info!("entering main consumption loop");
-    run_consumer_loop(consumer, frame_filter, rustfs_storage, &config.rustfs.prefix).await;
+    run_consumer_loop(consumer, state_machine).await;
 }
 
 /// Extract the robot_id from a Kafka message key of the form `{robot_id}:{timestamp_ms}`.
@@ -108,19 +123,16 @@ fn robot_id_from_key(key: Option<&[u8]>) -> String {
 
 async fn run_consumer_loop(
     consumer: StreamConsumer,
-    filter: Arc<Mutex<Box<dyn FrameFilter>>>,
-    storage: Arc<storage::RustfsStorage>,
-    prefix: &str,
+    mut state_machine: RecordingStateMachine,
 ) {
     use futures_util::StreamExt;
     let mut stream = consumer.stream();
-    let mut accepted: u64 = 0;
-    let mut rejected: u64 = 0;
+    let mut total: u64 = 0;
 
     while let Some(result) = stream.next().await {
         match result {
             Ok(msg) => {
-                let robot_id = robot_id_from_key(msg.key());
+                let _robot_id = robot_id_from_key(msg.key());
 
                 let payload = match msg.payload() {
                     Some(p) => p,
@@ -138,44 +150,12 @@ async fn run_consumer_loop(
                     }
                 };
 
-                // Run filter in a blocking task to avoid blocking the async runtime
-                let jpeg_data = frame.jpeg_data.clone();
-                let filter_clone = Arc::clone(&filter);
-                let should_store = tokio::task::spawn_blocking(move || {
-                    let mut f = filter_clone.blocking_lock();
-                    f.should_store(&jpeg_data)
-                })
-                .await
-                .unwrap_or(false);
-
-                if should_store {
-                    // Build per-robot prefix: e.g. "reachy-001/camera/"
-                    let robot_prefix = format!("{}/{}", robot_id, prefix);
-                    let object_key = frame.object_key(&robot_prefix);
-                    match storage
-                        .put_frame(&object_key, frame.jpeg_data, frame.captured_at_ms)
-                        .await
-                    {
-                        Ok(()) => {
-                            accepted += 1;
-                            debug!(
-                                key = object_key,
-                                robot_id,
-                                accepted,
-                                rejected,
-                                "frame stored"
-                            );
-                        }
-                        Err(e) => {
-                            error!(error = %e, key = object_key, "failed to store frame");
-                        }
-                    }
-                } else {
-                    rejected += 1;
-                    if rejected % 100 == 0 {
-                        debug!(accepted, rejected, "frame filter stats");
-                    }
+                total += 1;
+                if total % 100 == 0 {
+                    debug!(total, "frames processed");
                 }
+
+                state_machine.process_frame(&frame).await;
             }
             Err(e) => {
                 warn!(error = %e, "Kafka consume error");
