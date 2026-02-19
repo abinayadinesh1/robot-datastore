@@ -118,17 +118,28 @@ cargo build --release
 Each robot runs its own producer pointed at its camera. All producers publish to the same Kafka topic. One consumer handles all robots.
 
 ```bash
-# Robot A producer
-RUST_LOG=info ./target/release/frame-bucket-producer config-reachy.toml
+# Robot A producer — robot_id overrides aws_s3.robot_id in config.toml
+RUST_LOG=info ./target/release/frame-bucket-producer reachy-001
 
-# Robot B producer (separate terminal or machine)
-RUST_LOG=info ./target/release/frame-bucket-producer config-bracketbot.toml
+# Robot B producer
+RUST_LOG=info ./target/release/frame-bucket-producer bracketbot-001
 
 # Consumer (filters + stores to RustFS, handles all robots)
-RUST_LOG=info ./target/release/frame-bucket-consumer config.toml
+RUST_LOG=info ./target/release/frame-bucket-consumer
 ```
 
-Both binaries read `config.toml` from the current directory by default, or accept a path as the first argument.
+Both binaries load `config.toml` from the current directory. Both producer args are optional and fall back to config values if omitted:
+
+```
+frame-bucket-producer [robot_id] [stream_url]
+```
+
+With a single shared `config.toml`, each robot just needs its identity and camera URL at launch:
+
+```bash
+./target/release/frame-bucket-producer reachy-001 http://100.107.96.29:8000/api/camera/stream
+./target/release/frame-bucket-producer bracketbot-001 http://192.168.1.42:8003/stream
+```
 
 ## Configuration
 
@@ -144,43 +155,6 @@ Edit `config.toml` (or a per-robot variant) to tune behavior. Key settings:
 | `stream.fps` | 10.0 | Target FPS for stream/poll rate. |
 | `eviction.threshold_percent` | 80.0 | Disk usage % that triggers eviction to AWS S3. |
 
-### Per-robot producer config
-
-Create one config file per robot, differing only in `stream.url` and `aws_s3.robot_id`:
-
-```toml
-# config-reachy.toml
-[kafka]
-brokers = "100.81.222.59:9092"
-topic = "camera.frames"
-
-[stream]
-url = "http://100.107.96.29:8000/api/camera/stream"
-quality = 80
-fps = 10.0
-mode = "mjpeg"
-
-[aws_s3]
-robot_id = "reachy-001"   # partition key + storage prefix
-# ... (other fields same as base config)
-```
-
-```toml
-# config-bracketbot.toml
-[kafka]
-brokers = "100.81.222.59:9092"
-topic = "camera.frames"
-
-[stream]
-url = "http://<bracketbot-ip>:8003/stream"
-quality = 80
-fps = 10.0
-mode = "mjpeg"
-
-[aws_s3]
-robot_id = "bracketbot-001"   # partition key + storage prefix
-# ... (other fields same as base config)
-```
 
 ## Verifying Stored Images
 
