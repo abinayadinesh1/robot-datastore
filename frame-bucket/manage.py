@@ -31,22 +31,68 @@ def _s3_client():
     )
 
 
-def clear_storage(keep=1):
-    """Delete all frames from the RustFS bucket, keeping the N most recent."""
+def list_buckets():
+    """Print all buckets and their top-level prefixes at the RustFS endpoint."""
+    s3 = _s3_client()
+    buckets = s3.list_buckets().get("Buckets", [])
+    if not buckets:
+        print(f"No buckets found at {S3_ENDPOINT}")
+        return
+    print(f"Buckets at {S3_ENDPOINT}:")
+    for b in buckets:
+        name = b["Name"]
+        print(f"  {name}/")
+        resp = s3.list_objects_v2(Bucket=name, Delimiter="/")
+        for cp in resp.get("CommonPrefixes", []):
+            print(f"    {cp['Prefix']}")
+            resp2 = s3.list_objects_v2(Bucket=name, Prefix=cp["Prefix"], Delimiter="/")
+            for cp2 in resp2.get("CommonPrefixes", []):
+                print(f"      {cp2['Prefix']}")
+
+
+def clear_storage(keep=0, bucket=BUCKET, prefix=PREFIX):
+    """Delete all frames from the given bucket/prefix, keeping the N most recent."""
     s3 = _s3_client()
     paginator = s3.get_paginator("list_objects_v2")
+    print(f"Clearing s3://{bucket}/{prefix} ...", flush=True)
+
+    if keep == 0:
+        # Stream deletions page by page — no need to buffer everything
+        total = 0
+        try:
+            for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+                batch = page.get("Contents", [])
+                if not batch:
+                    continue
+                s3.delete_objects(Bucket=bucket, Delete={"Objects": [{"Key": o["Key"]} for o in batch]})
+                total += len(batch)
+                print(f"  Deleted {total}...", flush=True)
+        except s3.exceptions.NoSuchBucket:
+            print(f"Bucket '{bucket}' does not exist at {S3_ENDPOINT}. Run 'list-buckets' to see available buckets.")
+            return
+        print(f"Done. Deleted {total} from s3://{bucket}/{prefix}")
+        return
+
+    # keep > 0: collect all keys first (already in chronological order from S3)
     all_objects = []
-    for page in paginator.paginate(Bucket=BUCKET, Prefix=PREFIX):
-        all_objects.extend(page.get("Contents", []))
-    # Sort by key (encodes timestamp) so newest are last
-    all_objects.sort(key=lambda o: o["Key"])
-    to_delete = all_objects[:-keep] if keep > 0 else all_objects
+    try:
+        for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+            all_objects.extend(page.get("Contents", []))
+            print(f"  Listed {len(all_objects)} objects...", flush=True)
+    except s3.exceptions.NoSuchBucket:
+        print(f"Bucket '{bucket}' does not exist at {S3_ENDPOINT}. Run 'list-buckets' to see available buckets.")
+        return
+    to_delete = all_objects[:-keep]
+    if not to_delete:
+        print(f"Nothing to delete (found {len(all_objects)}, keeping all).")
+        return
     total = 0
     for i in range(0, len(to_delete), 1000):
         batch = to_delete[i:i + 1000]
-        s3.delete_objects(Bucket=BUCKET, Delete={"Objects": [{"Key": o["Key"]} for o in batch]})
+        s3.delete_objects(Bucket=bucket, Delete={"Objects": [{"Key": o["Key"]} for o in batch]})
         total += len(batch)
-    print(f"Deleted {total}, kept {len(all_objects) - total} from s3://{BUCKET}/{PREFIX}")
+        print(f"  Deleted {total}/{len(to_delete)}...", flush=True)
+    print(f"Done. Deleted {total}, kept {len(all_objects) - total} from s3://{bucket}/{prefix}")
 
 
 def _parse_key_timestamp(key):
@@ -93,7 +139,7 @@ def delete_bucket():
     print(f"Bucket '{BUCKET}' deleted.")
 
 
-def clear_range(from_dt=None, to_dt=None):
+def clear_range(from_dt=None, to_dt=None, bucket=BUCKET, prefix=PREFIX):
     """Delete frames whose timestamps fall within [from_dt, to_dt] (UTC).
 
     Either bound may be omitted to leave that end open.
@@ -104,28 +150,40 @@ def clear_range(from_dt=None, to_dt=None):
     s3 = _s3_client()
     paginator = s3.get_paginator("list_objects_v2")
     to_delete = []
-    for page in paginator.paginate(Bucket=BUCKET, Prefix=PREFIX):
-        for obj in page.get("Contents", []):
-            try:
-                ts = _parse_key_timestamp(obj["Key"])
-            except (ValueError, IndexError):
-                continue
-            if from_dt and ts < from_dt:
-                continue
-            if to_dt and ts > to_dt:
-                continue
-            to_delete.append(obj)
+    listed = 0
+    print(f"Listing s3://{bucket}/{prefix} ...", flush=True)
+    try:
+        for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+            for obj in page.get("Contents", []):
+                listed += 1
+                try:
+                    ts = _parse_key_timestamp(obj["Key"])
+                except (ValueError, IndexError):
+                    continue
+                if from_dt and ts < from_dt:
+                    continue
+                if to_dt and ts > to_dt:
+                    continue
+                to_delete.append(obj)
+            print(f"  Scanned {listed}, matched {len(to_delete)}...", flush=True)
+    except s3.exceptions.NoSuchBucket:
+        print(f"Bucket '{bucket}' does not exist at {S3_ENDPOINT}. Run 'list-buckets' to see available buckets.")
+        return
+    if not to_delete:
+        print(f"Nothing to delete in range.")
+        return
     total = 0
     for i in range(0, len(to_delete), 1000):
         batch = to_delete[i:i + 1000]
         s3.delete_objects(
-            Bucket=BUCKET,
+            Bucket=bucket,
             Delete={"Objects": [{"Key": o["Key"]} for o in batch]},
         )
         total += len(batch)
+        print(f"  Deleted {total}/{len(to_delete)}...", flush=True)
     lo = from_dt.isoformat() if from_dt else "beginning"
     hi = to_dt.isoformat() if to_dt else "now"
-    print(f"Deleted {total} frames in range [{lo}, {hi}].")
+    print(f"Done. Deleted {total} frames from s3://{bucket} in range [{lo}, {hi}].")
 
 
 def _is_running(name):
@@ -194,10 +252,12 @@ def list_timestamps():
 
 if __name__ == "__main__":
     hard_reset = "--hard-reset" in sys.argv
-    # Parse flags: --keep N, --from DT, --to DT
+    # Parse flags: --keep N, --from DT, --to DT, --bucket NAME, --prefix PATH
     keep = 1
     from_dt = None
     to_dt = None
+    bucket = BUCKET
+    prefix = PREFIX
     filtered = []
     i = 1
     while i < len(sys.argv):
@@ -211,6 +271,12 @@ if __name__ == "__main__":
         elif a == "--to":
             i += 1
             to_dt = _parse_user_dt(sys.argv[i])
+        elif a == "--bucket":
+            i += 1
+            bucket = sys.argv[i].rstrip("/")
+        elif a == "--prefix":
+            i += 1
+            prefix = sys.argv[i]
         elif a == "--hard-reset":
             pass
         else:
@@ -219,8 +285,9 @@ if __name__ == "__main__":
     args = filtered
 
     commands = {
-        "clear": lambda: clear_storage(keep=keep),
-        "clear-range": lambda: clear_range(from_dt=from_dt, to_dt=to_dt),
+        "list-buckets": lambda: list_buckets(),
+        "clear": lambda: clear_storage(keep=keep, bucket=bucket, prefix=prefix),
+        "clear-range": lambda: clear_range(from_dt=from_dt, to_dt=to_dt, bucket=bucket, prefix=prefix),
         "delete-bucket": lambda: delete_bucket(),
         "start-producer": lambda: start_producer(hard_reset),
         "start-consumer": lambda: start_consumer(hard_reset),
@@ -232,11 +299,16 @@ if __name__ == "__main__":
         print("Usage: python3 manage.py <command> [options]")
         print()
         print("Commands:")
+        print(f"  list-buckets       List all buckets at {S3_ENDPOINT}")
         print("  clear              Delete all frames, keeping N most recent (default 1)")
-        print("                       --keep N")
+        print(f"                       --keep N")
+        print(f"                       --bucket NAME   (default: {BUCKET})")
+        print(f"                       --prefix PATH   (default: {PREFIX})")
         print("  clear-range        Delete frames in a time range (UTC)")
         print("                       --from YYYY-MM-DD[THH:MM:SS]")
         print("                       --to   YYYY-MM-DD[THH:MM:SS]")
+        print(f"                       --bucket NAME   (default: {BUCKET})")
+        print(f"                       --prefix PATH   (default: {PREFIX})")
         print("  delete-bucket      Remove ALL objects then delete the bucket (with confirmation)")
         print("  start-producer     Start the frame producer")
         print("  start-consumer     Start the frame consumer")
