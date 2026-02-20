@@ -21,7 +21,7 @@ endpoint = "http://100.81.222.59:9000"
 access_key = "rustfsadmin"
 secret_key = "rustfsadmin"
 bucket = "camera-frames"
-prefix = "camera/"   # modality name — becomes {robot_id}/camera/{date}/...
+prefix = ""   # keys.rs builds the full path: {robot_id}/camera/{date}/...
 
 [eviction]
 check_interval_secs = 30

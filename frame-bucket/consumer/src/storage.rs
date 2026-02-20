@@ -193,26 +193,6 @@ impl RustfsStorage {
         Ok(())
     }
 
-    /// Store the sidecar JSON for an idle period (timestamp range). Not indexed for eviction.
-    pub async fn put_idle_sidecar(
-        &self,
-        object_key: &str,
-        json_bytes: Vec<u8>,
-    ) -> Result<(), StorageError> {
-        self.client
-            .put_object()
-            .bucket(&self.bucket)
-            .key(object_key)
-            .content_type("application/json")
-            .body(ByteStream::from(json_bytes))
-            .send()
-            .await
-            .map_err(|e| StorageError::PutObject(e.to_string()))?;
-
-        debug!(key = object_key, "stored idle sidecar in RustFS");
-        Ok(())
-    }
-
     /// Store a completed MP4 video segment. Indexed for eviction.
     pub async fn put_segment(
         &self,

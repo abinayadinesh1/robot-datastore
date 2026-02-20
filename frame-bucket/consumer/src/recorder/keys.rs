@@ -27,17 +27,6 @@ pub fn idle_jpeg_key(prefix: &str, robot_id: &str, start_ms: i64, end_ms: i64) -
     )
 }
 
-/// Key for the idle period's sidecar JSON (timestamp range metadata).
-/// e.g. "frames/reachy-001/camera/2026-02-18/20260218T093000000Z_20260218T094000000Z.json"
-pub fn idle_sidecar_key(prefix: &str, robot_id: &str, start_ms: i64, end_ms: i64) -> String {
-    format!(
-        "{prefix}{robot_id}/camera/{date}/{start}_{end}.json",
-        date = date_str(start_ms),
-        start = fmt_ts(start_ms),
-        end = fmt_ts(end_ms),
-    )
-}
-
 /// Key for an active video segment MP4.
 /// e.g. "frames/reachy-001/camera/2026-02-18/20260218T094000000Z_20260218T095000000Z.mp4"
 pub fn active_segment_key(prefix: &str, robot_id: &str, start_ms: i64, end_ms: i64) -> String {

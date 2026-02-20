@@ -14,7 +14,7 @@ S3_ENDPOINT = "http://100.81.222.59:9000"
 ACCESS_KEY = "rustfsadmin"
 SECRET_KEY = "rustfsadmin"
 BUCKET = "camera-frames"
-PREFIX = "frames/"
+PREFIX = ""
 
 PRODUCER_BIN = "./target/release/frame-bucket-producer"
 CONSUMER_BIN = "./target/release/frame-bucket-consumer"

@@ -11,7 +11,7 @@ use crate::filter::phash::{compute_ahash, hamming};
 use crate::storage::RustfsStorage;
 
 use super::encoder::{EncoderError, SegmentEncoder};
-use super::keys::{active_segment_key, idle_jpeg_key, idle_sidecar_key};
+use super::keys::{active_segment_key, idle_jpeg_key};
 
 enum RecordingState {
     /// The scene is static. We track the initial frame and the last timestamp
@@ -369,7 +369,7 @@ impl RecordingStateMachine {
         }
     }
 
-    /// Upload the idle period's JPEG and sidecar JSON to RustFS.
+    /// Upload the idle period's representative JPEG to RustFS.
     async fn upload_idle_record(
         &self,
         initial_jpeg: &[u8],
@@ -377,10 +377,7 @@ impl RecordingStateMachine {
         idle_end_ms: i64,
     ) {
         let jpeg_key = idle_jpeg_key(&self.prefix, &self.robot_id, idle_start_ms, idle_end_ms);
-        let sidecar_key =
-            idle_sidecar_key(&self.prefix, &self.robot_id, idle_start_ms, idle_end_ms);
 
-        // Upload JPEG
         let jpeg_size = initial_jpeg.len() as u64;
         match self
             .storage
@@ -402,24 +399,6 @@ impl RecordingStateMachine {
             }
             Err(e) => {
                 error!(error = %e, key = jpeg_key, "failed to upload idle frame");
-            }
-        }
-
-        // Upload sidecar JSON
-        let duration_secs = (idle_end_ms - idle_start_ms) as f64 / 1000.0;
-        let json = format!(
-            r#"{{"idle_start_ms":{idle_start_ms},"idle_end_ms":{idle_end_ms},"duration_secs":{duration_secs:.3}}}"#
-        );
-        match self
-            .storage
-            .put_idle_sidecar(&sidecar_key, json.into_bytes())
-            .await
-        {
-            Ok(()) => {
-                debug!(key = sidecar_key, "uploaded idle sidecar");
-            }
-            Err(e) => {
-                error!(error = %e, key = sidecar_key, "failed to upload idle sidecar");
             }
         }
     }
