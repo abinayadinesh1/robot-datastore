@@ -1,15 +1,17 @@
 use aws_credential_types::Credentials;
 use aws_sdk_s3::primitives::ByteStream;
 use aws_types::region::Region;
+use chrono::NaiveDateTime;
 use frame_bucket_common::config::RustfsConfig;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 /// Tracks stored objects for ring-buffer eviction ordering.
 #[derive(Debug)]
 pub struct ObjectEntry {
+    #[allow(dead_code)]
     pub key: String,
     pub size_bytes: u64,
 }
@@ -109,7 +111,8 @@ impl RustfsStorage {
         Ok(())
     }
 
-    /// Get the oldest N entries from the index.
+    /// Get the oldest N entries from the in-memory index.
+    #[allow(dead_code)]
     pub async fn oldest_n(&self, n: usize) -> Vec<(i64, ObjectEntry)> {
         let idx = self.index.lock().await;
         idx.iter()
@@ -233,6 +236,51 @@ impl RustfsStorage {
         (count, bytes)
     }
 
+    /// List the N oldest objects directly from the bucket (by lexicographic key order).
+    /// Used for eviction when the in-memory index may not have pre-existing objects.
+    pub async fn list_oldest_from_bucket(&self, n: usize) -> Vec<(String, u64, i64)> {
+        let mut result = Vec::new();
+        let mut continuation_token: Option<String> = None;
+
+        loop {
+            let mut req = self
+                .client
+                .list_objects_v2()
+                .bucket(&self.bucket)
+                .max_keys(n as i32);
+            if let Some(token) = &continuation_token {
+                req = req.continuation_token(token);
+            }
+
+            let resp = match req.send().await {
+                Ok(r) => r,
+                Err(e) => {
+                    warn!(error = %e, "failed to list objects from bucket for eviction");
+                    return result;
+                }
+            };
+
+            for obj in resp.contents() {
+                if result.len() >= n {
+                    return result;
+                }
+                if let Some(key) = obj.key() {
+                    let size = obj.size().unwrap_or(0) as u64;
+                    let ts = parse_start_ms_from_key(key).unwrap_or(0);
+                    result.push((key.to_string(), size, ts));
+                }
+            }
+
+            if resp.is_truncated() == Some(true) && result.len() < n {
+                continuation_token = resp.next_continuation_token().map(|s| s.to_string());
+            } else {
+                break;
+            }
+        }
+
+        result
+    }
+
     #[allow(dead_code)]
     pub fn client(&self) -> &aws_sdk_s3::Client {
         &self.client
@@ -242,6 +290,19 @@ impl RustfsStorage {
     pub fn bucket(&self) -> &str {
         &self.bucket
     }
+}
+
+/// Parse the start timestamp (in ms) from an object key.
+/// Keys look like: `robot/camera/2026-02-18/20260218T093000000Z_20260218T094000000Z.jpg`
+fn parse_start_ms_from_key(key: &str) -> Option<i64> {
+    let filename = key.rsplit('/').next()?;
+    let start_part = filename.split('_').next()?;
+    let clean = start_part.trim_end_matches('Z');
+    if clean.len() < 18 {
+        return None;
+    }
+    let dt = NaiveDateTime::parse_from_str(clean, "%Y%m%dT%H%M%S%3f").ok()?;
+    Some(dt.and_utc().timestamp_millis())
 }
 
 #[derive(Debug, thiserror::Error)]

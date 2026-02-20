@@ -2,6 +2,7 @@ use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::types::{BucketLocationConstraint, CreateBucketConfiguration};
 use aws_types::region::Region;
 use frame_bucket_common::config::{AwsS3Config, EvictionConfig};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, error, info, warn};
@@ -13,6 +14,7 @@ pub async fn run_eviction_loop(
     storage: Arc<RustfsStorage>,
     eviction_config: &EvictionConfig,
     aws_config: &AwsS3Config,
+    stats_path: PathBuf,
 ) {
     let aws_s3_client = create_aws_s3_client(aws_config).await;
     ensure_aws_bucket(&aws_s3_client, aws_config).await;
@@ -21,27 +23,49 @@ pub async fn run_eviction_loop(
     let threshold_bytes = (eviction_config.threshold_gb * 1_073_741_824.0) as u64;
     let target_bytes = (eviction_config.target_gb * 1_073_741_824.0) as u64;
 
+    // Read persisted stats from disk to account for pre-existing data from before this restart.
+    let mut baseline_bytes: u64 = 0;
+    let mut baseline_objects: usize = 0;
+    if let Some((objects, total_bytes)) = read_stats_file(&stats_path) {
+        baseline_objects = objects;
+        baseline_bytes = total_bytes;
+        info!(
+            objects = baseline_objects,
+            total_gb = format!("{:.3}", baseline_bytes as f64 / 1_073_741_824.0),
+            "loaded persisted storage stats from disk"
+        );
+    }
+
     loop {
         tokio::time::sleep(interval).await;
 
-        let (object_count, total_bytes) = storage.stats().await;
+        // Current session objects (added since last restart).
+        let (session_objects, session_bytes) = storage.stats().await;
+
+        // Total = pre-existing baseline + new objects this session.
+        let total_objects = baseline_objects + session_objects;
+        let total_bytes = baseline_bytes + session_bytes;
         let total_gb = total_bytes as f64 / 1_073_741_824.0;
 
         debug!(
-            objects = object_count,
+            baseline_objects,
+            session_objects,
+            total_objects,
             total_gb = format!("{:.3}", total_gb),
             threshold_gb = format!("{:.1}", eviction_config.threshold_gb),
             "storage check"
         );
 
-        // Log stats at info level every 10 intervals (~5 min at 30s interval)
-        // to give visibility without spamming.
+        // Persist combined stats to disk every check.
+        write_stats_file(&stats_path, total_objects, total_bytes);
+
+        // Log stats at info level every 10 intervals (~5 min at 30s interval).
         {
             static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
             let count = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             if count % 10 == 0 {
                 info!(
-                    objects = object_count,
+                    objects = total_objects,
                     total_mb = format!("{:.1}", total_bytes as f64 / 1_048_576.0),
                     total_gb = format!("{:.3}", total_gb),
                     threshold_gb = format!("{:.1}", eviction_config.threshold_gb),
@@ -54,7 +78,7 @@ pub async fn run_eviction_loop(
             info!(
                 total_gb = format!("{:.3}", total_gb),
                 threshold_gb = format!("{:.1}", eviction_config.threshold_gb),
-                objects = object_count,
+                objects = total_objects,
                 "storage exceeds threshold, starting eviction"
             );
 
@@ -64,17 +88,23 @@ pub async fn run_eviction_loop(
                 aws_config,
                 eviction_config,
                 target_bytes,
+                &mut baseline_bytes,
+                &mut baseline_objects,
             )
             .await
             {
                 Ok(count) => {
-                    let (new_objects, new_bytes) = storage.stats().await;
+                    let (session_objects, session_bytes) = storage.stats().await;
+                    let new_total_objects = baseline_objects + session_objects;
+                    let new_total_bytes = baseline_bytes + session_bytes;
                     info!(
                         evicted = count,
-                        remaining_objects = new_objects,
-                        remaining_gb = format!("{:.3}", new_bytes as f64 / 1_073_741_824.0),
+                        remaining_objects = new_total_objects,
+                        remaining_gb =
+                            format!("{:.3}", new_total_bytes as f64 / 1_073_741_824.0),
                         "eviction batch complete"
                     );
+                    write_stats_file(&stats_path, new_total_objects, new_total_bytes);
                     consecutive_failures = 0;
                 }
                 Err(e) => {
@@ -91,33 +121,80 @@ pub async fn run_eviction_loop(
     }
 }
 
+/// Read the persistent stats file. Returns (objects, total_bytes) or None.
+fn read_stats_file(path: &Path) -> Option<(usize, u64)> {
+    let content = std::fs::read_to_string(path).ok()?;
+    let objects = parse_json_u64(&content, "objects")? as usize;
+    let total_bytes = parse_json_u64(&content, "total_bytes")?;
+    Some((objects, total_bytes))
+}
+
+/// Extract a u64 value for a given key from a flat JSON object.
+fn parse_json_u64(json: &str, key: &str) -> Option<u64> {
+    let needle = format!("\"{}\":", key);
+    let pos = json.find(&needle)? + needle.len();
+    let rest = json[pos..].trim_start();
+    let end = rest
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(rest.len());
+    if end == 0 {
+        return None;
+    }
+    rest[..end].parse().ok()
+}
+
+/// Write a simple JSON stats file to disk.
+fn write_stats_file(path: &Path, objects: usize, total_bytes: u64) {
+    let total_mb = total_bytes as f64 / 1_048_576.0;
+    let total_gb = total_bytes as f64 / 1_073_741_824.0;
+    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let json = format!(
+        r#"{{"objects":{objects},"total_bytes":{total_bytes},"total_mb":{total_mb:.1},"total_gb":{total_gb:.3},"updated_at":"{now}"}}"#
+    );
+    if let Err(e) = std::fs::write(path, json) {
+        warn!(error = %e, path = %path.display(), "failed to write stats file");
+    }
+}
+
 async fn evict_batch(
     storage: &RustfsStorage,
     aws_client: &aws_sdk_s3::Client,
     aws_config: &AwsS3Config,
     eviction_config: &EvictionConfig,
     target_bytes: u64,
+    baseline_bytes: &mut u64,
+    baseline_objects: &mut usize,
 ) -> Result<usize, EvictionError> {
-    let entries = storage.oldest_n(eviction_config.batch_size).await;
+    // Always list from the bucket to find the truly oldest objects,
+    // regardless of whether they were added this session or before a restart.
+    let entries = storage
+        .list_oldest_from_bucket(eviction_config.batch_size)
+        .await;
 
     if entries.is_empty() {
-        debug!("no frames to evict");
+        debug!("no objects to evict");
         return Ok(0);
     }
 
     let mut evicted = 0;
 
-    for (captured_at_ms, entry) in &entries {
+    for (key, size, ts) in &entries {
+        // Check if this object exists in the current session's in-memory index.
+        let in_session_index = {
+            let idx = storage.index.lock().await;
+            idx.contains_key(ts)
+        };
+
         // Download from RustFS
         let data = storage
-            .get_object(&entry.key)
+            .get_object(key)
             .await
             .map_err(|e| EvictionError::Download(e.to_string()))?;
 
         // Upload to AWS S3 — mirror RustFS path under the archive prefix
-        let aws_key = format!("{}{}", aws_config.prefix, entry.key);
+        let aws_key = format!("{}{}", aws_config.prefix, key);
 
-        let content_type = if entry.key.ends_with(".mp4") {
+        let content_type = if key.ends_with(".mp4") {
             "video/mp4"
         } else {
             "image/jpeg"
@@ -135,22 +212,26 @@ async fn evict_batch(
         match put_result {
             Ok(resp) => {
                 let etag = resp.e_tag().unwrap_or("none");
-                debug!(
-                    aws_key,
-                    etag,
-                    "uploaded to AWS S3, deleting from RustFS"
-                );
+                debug!(aws_key, etag, "uploaded to AWS S3, deleting from RustFS");
 
-                // Only delete after confirmed upload
-                if let Err(e) = storage.delete_object(&entry.key, *captured_at_ms).await {
-                    warn!(error = %e, key = entry.key, "failed to delete from RustFS after S3 upload");
+                // Delete from RustFS (also removes from in-memory index if present)
+                if let Err(e) = storage.delete_object(key, *ts).await {
+                    warn!(error = %e, key, "failed to delete from RustFS after S3 upload");
                 }
+
+                // Only adjust baseline for pre-existing objects not in the session index.
+                // Session objects are already tracked by the index and removed by delete_object.
+                if !in_session_index {
+                    *baseline_bytes = baseline_bytes.saturating_sub(*size);
+                    *baseline_objects = baseline_objects.saturating_sub(1);
+                }
+
                 evicted += 1;
             }
             Err(e) => {
                 error!(
                     error = %e,
-                    key = entry.key,
+                    key,
                     "failed to upload to AWS S3, keeping in RustFS"
                 );
                 return Err(EvictionError::Upload(e.to_string()));
@@ -158,10 +239,11 @@ async fn evict_batch(
         }
 
         // Check if we've brought usage below target
-        let (_, current_bytes) = storage.stats().await;
-        if current_bytes < target_bytes {
+        let (_, session_bytes) = storage.stats().await;
+        let current_total = *baseline_bytes + session_bytes;
+        if current_total < target_bytes {
             info!(
-                current_gb = format!("{:.3}", current_bytes as f64 / 1_073_741_824.0),
+                current_gb = format!("{:.3}", current_total as f64 / 1_073_741_824.0),
                 target_gb = format!("{:.1}", target_bytes as f64 / 1_073_741_824.0),
                 "storage below target, stopping eviction"
             );
@@ -201,7 +283,11 @@ async fn ensure_aws_bucket(client: &aws_sdk_s3::Client, config: &AwsS3Config) {
     };
 
     match result {
-        Ok(_) => info!(bucket = config.bucket, region = config.region, "AWS S3 bucket created"),
+        Ok(_) => info!(
+            bucket = config.bucket,
+            region = config.region,
+            "AWS S3 bucket created"
+        ),
         Err(e) => warn!(
             error = %e,
             bucket = config.bucket,

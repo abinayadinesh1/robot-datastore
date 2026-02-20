@@ -103,8 +103,10 @@ async fn main() {
     let eviction_storage = Arc::clone(&rustfs_storage);
     let eviction_config = config.eviction.clone();
     let aws_config = config.aws_s3.clone();
+    let stats_path = std::path::Path::new(&config.database.path).join("storage_stats.json");
     tokio::spawn(async move {
-        eviction::run_eviction_loop(eviction_storage, &eviction_config, &aws_config).await;
+        eviction::run_eviction_loop(eviction_storage, &eviction_config, &aws_config, stats_path)
+            .await;
     });
 
     // Main consumption loop
