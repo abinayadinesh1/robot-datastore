@@ -4,12 +4,11 @@ use aws_types::region::Region;
 use frame_bucket_common::config::{AwsS3Config, EvictionConfig};
 use std::sync::Arc;
 use std::time::Duration;
-use sysinfo::Disks;
 use tracing::{debug, error, info, warn};
 
 use crate::storage::RustfsStorage;
 
-/// Monitors disk usage and evicts oldest frames from RustFS to AWS S3.
+/// Monitors local RustFS storage usage and evicts oldest objects to AWS S3.
 pub async fn run_eviction_loop(
     storage: Arc<RustfsStorage>,
     eviction_config: &EvictionConfig,
@@ -19,18 +18,44 @@ pub async fn run_eviction_loop(
     ensure_aws_bucket(&aws_s3_client, aws_config).await;
     let interval = Duration::from_secs(eviction_config.check_interval_secs);
     let mut consecutive_failures: u32 = 0;
+    let threshold_bytes = (eviction_config.threshold_gb * 1_073_741_824.0) as u64;
+    let target_bytes = (eviction_config.target_gb * 1_073_741_824.0) as u64;
 
     loop {
         tokio::time::sleep(interval).await;
 
-        let usage = disk_usage_percent();
-        debug!(usage_percent = format!("{:.1}", usage), "disk check");
+        let (object_count, total_bytes) = storage.stats().await;
+        let total_gb = total_bytes as f64 / 1_073_741_824.0;
 
-        if usage > eviction_config.threshold_percent {
+        debug!(
+            objects = object_count,
+            total_gb = format!("{:.3}", total_gb),
+            threshold_gb = format!("{:.1}", eviction_config.threshold_gb),
+            "storage check"
+        );
+
+        // Log stats at info level every 10 intervals (~5 min at 30s interval)
+        // to give visibility without spamming.
+        {
+            static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let count = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if count % 10 == 0 {
+                info!(
+                    objects = object_count,
+                    total_mb = format!("{:.1}", total_bytes as f64 / 1_048_576.0),
+                    total_gb = format!("{:.3}", total_gb),
+                    threshold_gb = format!("{:.1}", eviction_config.threshold_gb),
+                    "storage stats"
+                );
+            }
+        }
+
+        if total_bytes > threshold_bytes {
             info!(
-                usage_percent = format!("{:.1}", usage),
-                threshold = format!("{:.1}", eviction_config.threshold_percent),
-                "disk usage exceeds threshold, starting eviction"
+                total_gb = format!("{:.3}", total_gb),
+                threshold_gb = format!("{:.1}", eviction_config.threshold_gb),
+                objects = object_count,
+                "storage exceeds threshold, starting eviction"
             );
 
             match evict_batch(
@@ -38,11 +63,18 @@ pub async fn run_eviction_loop(
                 &aws_s3_client,
                 aws_config,
                 eviction_config,
+                target_bytes,
             )
             .await
             {
                 Ok(count) => {
-                    info!(evicted = count, "eviction batch complete");
+                    let (new_objects, new_bytes) = storage.stats().await;
+                    info!(
+                        evicted = count,
+                        remaining_objects = new_objects,
+                        remaining_gb = format!("{:.3}", new_bytes as f64 / 1_073_741_824.0),
+                        "eviction batch complete"
+                    );
                     consecutive_failures = 0;
                 }
                 Err(e) => {
@@ -64,6 +96,7 @@ async fn evict_batch(
     aws_client: &aws_sdk_s3::Client,
     aws_config: &AwsS3Config,
     eviction_config: &EvictionConfig,
+    target_bytes: u64,
 ) -> Result<usize, EvictionError> {
     let entries = storage.oldest_n(eviction_config.batch_size).await;
 
@@ -82,7 +115,6 @@ async fn evict_batch(
             .map_err(|e| EvictionError::Download(e.to_string()))?;
 
         // Upload to AWS S3 — mirror RustFS path under the archive prefix
-        // entry.key is already "{robot_id}/{modality}/{date}/{ts}_{seq}.jpg"
         let aws_key = format!("{}{}", aws_config.prefix, entry.key);
 
         let content_type = if entry.key.ends_with(".mp4") {
@@ -126,12 +158,12 @@ async fn evict_batch(
         }
 
         // Check if we've brought usage below target
-        let usage = disk_usage_percent();
-        if usage < eviction_config.target_percent {
+        let (_, current_bytes) = storage.stats().await;
+        if current_bytes < target_bytes {
             info!(
-                usage_percent = format!("{:.1}", usage),
-                target = format!("{:.1}", eviction_config.target_percent),
-                "disk usage below target, stopping eviction"
+                current_gb = format!("{:.3}", current_bytes as f64 / 1_073_741_824.0),
+                target_gb = format!("{:.1}", target_bytes as f64 / 1_073_741_824.0),
+                "storage below target, stopping eviction"
             );
             break;
         }
@@ -184,32 +216,6 @@ async fn create_aws_s3_client(config: &AwsS3Config) -> aws_sdk_s3::Client {
         .load()
         .await;
     aws_sdk_s3::Client::new(&sdk_config)
-}
-
-/// Get current disk usage as a percentage (0-100).
-fn disk_usage_percent() -> f64 {
-    let disks = Disks::new_with_refreshed_list();
-
-    // Find the root filesystem or the disk with the most total space
-    let disk = disks
-        .iter()
-        .max_by_key(|d| d.total_space());
-
-    match disk {
-        Some(d) => {
-            let total = d.total_space() as f64;
-            let available = d.available_space() as f64;
-            if total > 0.0 {
-                ((total - available) / total) * 100.0
-            } else {
-                0.0
-            }
-        }
-        None => {
-            warn!("no disks found, reporting 0% usage");
-            0.0
-        }
-    }
 }
 
 #[derive(Debug, thiserror::Error)]

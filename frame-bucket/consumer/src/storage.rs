@@ -225,15 +225,12 @@ impl RustfsStorage {
         Ok(())
     }
 
-    /// Total bytes tracked in the index.
-    #[allow(dead_code)]
-    pub async fn total_bytes(&self) -> u64 {
-        self.index
-            .lock()
-            .await
-            .values()
-            .map(|e| e.size_bytes)
-            .sum()
+    /// Returns (object_count, total_bytes) from the in-memory index.
+    pub async fn stats(&self) -> (usize, u64) {
+        let idx = self.index.lock().await;
+        let count = idx.len();
+        let bytes: u64 = idx.values().map(|e| e.size_bytes).sum();
+        (count, bytes)
     }
 
     #[allow(dead_code)]

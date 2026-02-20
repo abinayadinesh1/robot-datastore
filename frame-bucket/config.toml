@@ -25,8 +25,8 @@ prefix = ""   # keys.rs builds the full path: {robot_id}/camera/{date}/...
 
 [eviction]
 check_interval_secs = 30
-threshold_percent = 80.0
-target_percent = 70.0
+threshold_gb = 5   # evict when local RustFS storage exceeds this
+target_gb = 1      # evict until storage drops below this
 batch_size = 50
 
 [aws_s3]
@@ -52,4 +52,4 @@ codec = "h264"       # "h264" or "h265"
 crf = 23             # quality: lower = better, 18-28 is typical range
 preset = "fast"      # encoding speed: ultrafast, superfast, veryfast, faster, fast, medium, slow
 fps = 10.0
-active_to_idle_consecutive_frames = 5  # how many similar frames trigger idle transition
+active_to_idle_consecutive_frames = 70  # how many similar frames trigger idle transition

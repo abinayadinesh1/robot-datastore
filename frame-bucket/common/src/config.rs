@@ -68,10 +68,10 @@ pub struct RustfsConfig {
 pub struct EvictionConfig {
     #[serde(default = "default_check_interval")]
     pub check_interval_secs: u64,
-    #[serde(default = "default_threshold_percent")]
-    pub threshold_percent: f64,
-    #[serde(default = "default_target_percent")]
-    pub target_percent: f64,
+    #[serde(default = "default_threshold_gb")]
+    pub threshold_gb: f64,
+    #[serde(default = "default_target_gb")]
+    pub target_gb: f64,
     #[serde(default = "default_batch_size")]
     pub batch_size: usize,
 }
@@ -159,11 +159,11 @@ fn default_rustfs_prefix() -> String {
 fn default_check_interval() -> u64 {
     30
 }
-fn default_threshold_percent() -> f64 {
-    80.0
+fn default_threshold_gb() -> f64 {
+    50.0
 }
-fn default_target_percent() -> f64 {
-    70.0
+fn default_target_gb() -> f64 {
+    40.0
 }
 fn default_batch_size() -> usize {
     50
