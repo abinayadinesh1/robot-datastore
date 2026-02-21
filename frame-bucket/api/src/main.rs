@@ -1003,19 +1003,19 @@ async fn main() {
     let app = Router::new()
         // Existing segment routes
         .route("/robots", get(list_robots))
-        .route("/robots/{robot_id}/segments", get(list_segments))
-        .route("/robots/{robot_id}/segments/{id}", get(get_segment).patch(patch_labels))
-        .route("/robots/{robot_id}/segments/{id}/video", get(video_redirect))
+        .route("/robots/:robot_id/segments", get(list_segments))
+        .route("/robots/:robot_id/segments/:id", get(get_segment).patch(patch_labels))
+        .route("/robots/:robot_id/segments/:id/video", get(video_redirect))
         // Timeline
-        .route("/robots/{robot_id}/timeline", get(get_timeline))
+        .route("/robots/:robot_id/timeline", get(get_timeline))
         // Collections
-        .route("/robots/{robot_id}/collections", get(list_collections).post(create_collection))
-        .route("/robots/{robot_id}/collections/{id}", get(get_collection).delete(delete_collection))
+        .route("/robots/:robot_id/collections", get(list_collections).post(create_collection))
+        .route("/robots/:robot_id/collections/:id", get(get_collection).delete(delete_collection))
         // Clips
-        .route("/robots/{robot_id}/collections/{collection_id}/clips", get(list_clips).post(create_clip))
-        .route("/robots/{robot_id}/collections/{collection_id}/clips/{clip_id}", delete(delete_clip))
+        .route("/robots/:robot_id/collections/:collection_id/clips", get(list_clips).post(create_clip))
+        .route("/robots/:robot_id/collections/:collection_id/clips/:clip_id", delete(delete_clip))
         // Download info
-        .route("/robots/{robot_id}/collections/{collection_id}/download-info", get(download_info))
+        .route("/robots/:robot_id/collections/:collection_id/download-info", get(download_info))
         .layer(cors)
         .with_state(state);
 

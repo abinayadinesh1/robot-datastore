@@ -6,32 +6,41 @@ Kafka-driven camera frame pipeline for streaming, storing, searching, and labell
 
 ```
 [Robot A camera :8000]                   [RustFS :9000]            [AWS S3]
-        | MJPEG stream                         ^                        ^
-        v                                      |                        |
-+-- Producer (robot_id="reachy-001") --+       |                        |
-| Parse MJPEG ->                        |       |                        |
-| key="reachy-001:{timestamp_ms}"       |       |                        |
-| Produce to Kafka "camera.frames"      |       |                        |
-+-------+-------------------------------+       |                        |
-        |                                       |                        |
-        +---- Kafka "camera.frames" +-----------+                        |
-        |     partition 0: reachy-001 frames    |                        |
-        |     partition 1: bracketbot-001 frames|                        |
-        |                                       |                        |
-+-- Producer (robot_id="bracketbot-001") --+   |                        |
-| Parse MJPEG ->                            |   |                        |
-| key="bracketbot-001:{timestamp_ms}"       |   |                        |
-| Produce to Kafka "camera.frames"          |   |                        |
-+-------------------------------------------+   |                        |
-                                                |                        |
-        +-- Consumer -------------------------+-+------------------------+
-        |                                     |
-        | Parse robot_id from Kafka key        |
-        | Filter (aHash) ->                    |
-        | Store to RustFS:                     |
-        |   frames/{robot_id}/{date}/{ts}.jpg  |
-        | Monitor disk -> Evict oldest to AWS  |
-        +-------------------------------------+
+        | MJPEG stream                         ^  |                      ^
+        v                                      |  |                      |
++-- Producer (robot_id="reachy-001") --+       |  |                      |
+| Parse MJPEG ->                        |       |  |                      |
+| key="reachy-001:{timestamp_ms}"       |       |  |                      |
+| Produce to Kafka "camera.frames"      |       |  |                      |
++-------+-------------------------------+       |  |                      |
+        |                                       |  |                      |
+        +---- Kafka "camera.frames" +-----------+  |                      |
+        |     partition 0: reachy-001 frames    |  |                      |
+        |     partition 1: bracketbot-001 frames|  |                      |
+        |                                       |  |                      |
++-- Consumer --------------------------------+-+  |                      |
+| Parse robot_id from Kafka key               |    |                      |
+| Filter (aHash) -> Store to RustFS           |    |                      |
+| Record segments: ACTIVE (MP4) / IDLE (JPEG) |    |                      |
+| SQLite: {robot_id}.db per robot             |    |                      |
+| Monitor disk -> Evict oldest to AWS         |    |                      |
++---------------------------------------------+   |                      |
+                                                   |                      |
++-- API Server :8080 -----------------------------+|                      |
+| /robots/{id}/segments   - list/query segments    |                      |
+| /robots/{id}/timeline   - scrubber time range    |                      |
+| /robots/{id}/collections - CRUD collections      |                      |
+| /robots/{id}/collections/{id}/clips - CRUD clips |                      |
+| Proxies video URLs -> RustFS                     |                      |
+| Writes clip manifests -> labelled-data bucket    |                      |
++--------------------------------------------------+                      |
+        |                                                                 |
++-- Stream Viewer :3000 -------+                                          |
+| index.html - live grid view  |                                          |
+| robot.html - live + playback |                                          |
+|   View Mode: scrubber, clips |                                          |
+|   collections, labeling      |                                          |
++------------------------------+                                          |
 ```
 
 **Producer** — connects to a camera's MJPEG stream (or polls single frames), wraps each JPEG in a `TimestampedFrame` (8-byte timestamp + 8-byte seq + JPEG payload), sets the Kafka message key to `{robot_id}:{timestamp_ms}`, and publishes to the shared `camera.frames` topic.
@@ -52,11 +61,22 @@ frame-bucket/
 │       ├── filter/
 │       │   ├── phash.rs     # perceptual hash (primary)
 │       │   └── histogram.rs # histogram comparison (alt)
+│       ├── recorder/
+│       │   └── encoder.rs   # FFmpeg MP4 segment encoding
+│       ├── db.rs            # SQLite: segments, collections, clips
 │       ├── storage.rs       # RustFS S3 client
 │       └── eviction.rs      # disk monitor + AWS S3 archival
+├── api/                     # HTTP API server (Axum)
+│   └── src/main.rs          # REST endpoints for segments, collections, clips
 ├── common/                  # shared config + frame serialization
 ├── check_bucket.py          # inspect stored frames
 └── phash_compare.py         # compare two images with aHash
+
+stream-viewer/               # frontend (vanilla HTML/JS/CSS)
+├── index.html               # live grid view of all robot streams
+├── robot.html               # single robot: live feed + View Mode
+├── sources.json             # stream sources configuration
+└── styles.css               # shared styles
 ```
 
 ## Where Are Frames Stored?
@@ -162,6 +182,36 @@ With a single shared `config.toml`, each robot just needs its identity and camer
 ./target/release/frame-bucket-producer reachy-001 http://100.107.96.29:8000/api/camera/stream
 ./target/release/frame-bucket-producer bracketbot-001 http://192.168.1.42:8003/stream
 ```
+
+### 5. Run the API server
+
+The API server provides REST endpoints for querying segments, managing collections/clips, and proxying video URLs. It reads the same `config.toml` and connects to RustFS + the per-robot SQLite databases created by the consumer.
+
+```bash
+cd frame-bucket
+RUST_LOG=info cargo run --release --package frame-bucket-api
+```
+
+The API starts on port 8080 (configurable via `config.toml` `[api] port`). Verify it's running:
+
+```bash
+curl http://localhost:8080/robots
+```
+
+### 6. Serve the stream viewer
+
+The stream viewer is a static HTML/JS frontend. Serve it on a different port (the API is on 8080):
+
+```bash
+cd stream-viewer
+python3 -m http.server 3000
+```
+
+Then open:
+- **http://localhost:3000** — live grid view of all streams
+- **http://localhost:3000/robot.html?label=MyRobot&url=http://...&robot_id=reachy-001** — single robot view
+
+In the single robot view, click "View Mode" to access the scrubber, clip selection, and collection management. This requires the API server to be running on port 8080.
 
 ## Configuration
 
