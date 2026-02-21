@@ -9,6 +9,20 @@
 </head>
 <body class="page-index">
 
+<div class="grid-bg">
+  <div class="grid-canvas">
+    <div class="grid-plane">
+      <div class="grid-vlines"></div>
+      <div class="grid-hlines"></div>
+      <div class="grid-axis-h"></div>
+      <div class="grid-axis-v"></div>
+    </div>
+    <div class="grid-scan"></div>
+  </div>
+  <div class="grid-fade"></div>
+  <div class="grid-topfade"></div>
+</div>
+
 <header>
   <div class="h-left">
     <div class="logo-robot" id="logo-robot">
@@ -19,6 +33,29 @@
     </div>
     <div class="h-sep"></div>
     <div id="stream-badge" class="stream-badge">0 feeds</div>
+    <div class="h-sep"></div>
+    <!-- Show All streams filter -->
+    <div class="show-all-dropdown" style="position:relative;">
+      <button class="btn-ghost" id="btn-show-all">Show All &#x25BE;</button>
+      <div class="dropdown-menu" id="show-all-menu" style="display:none;position:absolute;top:100%;left:0;z-index:200;min-width:220px;">
+        <div id="show-all-list"></div>
+      </div>
+    </div>
+    <!-- Toggle Modalities -->
+    <div class="show-all-dropdown" style="position:relative;">
+      <button class="btn-ghost" id="btn-modalities">Modalities</button>
+      <div class="dropdown-menu" id="modalities-menu" style="display:none;position:absolute;top:100%;left:0;z-index:200;min-width:180px;">
+        <label class="dropdown-item" style="display:flex;align-items:center;gap:8px;cursor:default;">
+          <input type="checkbox" checked disabled> Camera
+        </label>
+        <label class="dropdown-item text-dim" style="display:flex;align-items:center;gap:8px;cursor:default;">
+          <input type="checkbox" disabled> Microphone (coming soon)
+        </label>
+        <label class="dropdown-item text-dim" style="display:flex;align-items:center;gap:8px;cursor:default;">
+          <input type="checkbox" disabled> Motor angles (coming soon)
+        </label>
+      </div>
+    </div>
   </div>
     <div class="h-right">
     <div class="h-clock" id="clock">—</div>
@@ -68,22 +105,6 @@
   <div id="grid"></div>
 </main>
 
-<!-- ── 3D perspective grid stage ── -->
-<div class="grid-stage">
-  <div class="grid-bg">
-    <div class="grid-canvas">
-      <div class="grid-plane">
-        <div class="grid-vlines"></div>
-        <div class="grid-hlines"></div>
-        <div class="grid-axis-h"></div>
-        <div class="grid-axis-v"></div>
-      </div>
-      <div class="grid-scan"></div>
-    </div>
-    <div class="grid-fade"></div>
-    <div class="grid-topfade"></div>
-  </div>
-</div>
 
 <div id="modal">
   <div class="modal-box">
@@ -115,7 +136,7 @@ function save(){localStorage.setItem(STORAGE_KEY,JSON.stringify(state.streams));
 async function loadInitial(){
   const saved=localStorage.getItem(STORAGE_KEY);
   if(saved){try{state.streams=JSON.parse(saved);state.nextId=parseInt(localStorage.getItem(NEXT_ID_KEY)||'1',10);return;}catch(_){}}
-  try{const res=await fetch('sources.json');const data=await res.json();if(Array.isArray(data.streams)){data.streams.forEach(s=>state.streams.push({id:state.nextId++,label:s.label||'Camera',url:s.url}));save();return;}}catch(_){}
+  try{const res=await fetch('sources.json');const data=await res.json();if(Array.isArray(data.streams)){data.streams.forEach(s=>state.streams.push({id:state.nextId++,label:s.label||'Camera',url:s.url,robot_id:s.robot_id||'reachy-001'}));save();return;}}catch(_){}
   state.streams.push({id:state.nextId++,label:'Front Camera',url:DEFAULT_URL});save();
 }
 
@@ -219,7 +240,7 @@ function attachTileHandlers(tile,header,streamId){
   });
   tile.querySelector('.tile-body').addEventListener('dblclick',()=>{
     const s=state.streams.find(s=>s.id===streamId);
-    if(s)window.open('robot.html?label='+encodeURIComponent(s.label)+'&url='+encodeURIComponent(s.url),'_blank');
+    if(s)window.open('robot.html?label='+encodeURIComponent(s.label)+'&url='+encodeURIComponent(s.url)+'&robot_id='+encodeURIComponent(s.robot_id||'reachy-001'),'_blank');
   });
 }
 
@@ -246,6 +267,57 @@ modal.addEventListener('click',e=>{if(e.target===modal)closeModal();});
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&modal.classList.contains('open'))closeModal();if(e.key==='Enter'&&modal.classList.contains('open')&&document.activeElement!==$('modal-cancel'))submitModal();});
 function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 loadInitial().then(()=>render());
+
+// ── Show All dropdown ────────────────────────────────────────────────────
+const $showAllBtn=document.getElementById('btn-show-all');
+const $showAllMenu=document.getElementById('show-all-menu');
+const $showAllList=document.getElementById('show-all-list');
+$showAllBtn.addEventListener('click',()=>{
+  $showAllMenu.style.display=$showAllMenu.style.display==='none'?'block':'none';
+  renderShowAll();
+});
+document.addEventListener('click',e=>{
+  if(!e.target.closest('.show-all-dropdown'))$showAllMenu.style.display='none';
+  if(!e.target.closest('.show-all-dropdown'))document.getElementById('modalities-menu').style.display='none';
+});
+document.getElementById('btn-modalities').addEventListener('click',()=>{
+  const m=document.getElementById('modalities-menu');
+  m.style.display=m.style.display==='none'?'block':'none';
+});
+function renderShowAll(){
+  $showAllList.innerHTML='';
+  state.streams.forEach(s=>{
+    const lbl=document.createElement('label');
+    lbl.className='dropdown-item';
+    lbl.style.cssText='display:flex;align-items:center;gap:8px;cursor:pointer;padding:6px 12px;';
+    const cb=document.createElement('input');
+    cb.type='checkbox';
+    cb.checked=s.visible!==false;
+    cb.addEventListener('change',()=>{s.visible=cb.checked;save();render();});
+    lbl.appendChild(cb);
+    lbl.appendChild(document.createTextNode(s.label));
+    $showAllList.appendChild(lbl);
+  });
+}
+
+// Override render to respect visibility and cap at 9
+const _origRender=render;
+render=function(){
+  const grid=document.getElementById('grid');
+  const visible=state.streams.filter(s=>s.visible!==false);
+  // Remove tiles for hidden streams
+  grid.querySelectorAll('.stream-tile').forEach(t=>{
+    const tid=parseInt(t.dataset.id);
+    if(!visible.find(s=>s.id===tid))t.remove();
+  });
+  // Show up to 9
+  const shown=visible.slice(0,9);
+  const existing=new Set([...grid.querySelectorAll('.stream-tile')].map(t=>parseInt(t.dataset.id)));
+  shown.forEach((s,i)=>{if(!existing.has(s.id))grid.appendChild(createTile(s,i));});
+  // Update badge
+  const badge=document.getElementById('stream-badge');
+  if(badge)badge.textContent=`${shown.length} feed${shown.length!==1?'s':''}${visible.length>9?' (+'+(visible.length-9)+' hidden)':''}`;
+};
 </script>
 </body>
 </html>

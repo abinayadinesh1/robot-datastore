@@ -1,8 +1,9 @@
 {
   "streams": [
     {
-      "label": "Reachy Mini Bedroom ",
-      "url": "http://100.107.96.29:8000/api/camera/stream"
+      "label": "Reachy Mini Bedroom",
+      "url": "http://100.107.96.29:8000/api/camera/stream",
+      "robot_id": "reachy-001"
     }
   ]
 }

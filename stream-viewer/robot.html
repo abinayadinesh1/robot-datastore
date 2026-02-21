@@ -46,40 +46,219 @@
     <div class="stream-sublabel" id="fig-sub"></div>
   </div>
 
-  <div class="stream-box" id="stream-box">
-    <div class="status-overlay" id="status-overlay">
-      <div class="status-cross">
-        <div class="status-cline-h"></div>
-        <div class="status-cline-v"></div>
-      </div>
-      <span class="status-text" id="overlay-text">Acquiring</span>
-    </div>
-    <img id="stream-img" loading="eager" decoding="async" alt="">
+  <!-- Mode toggle -->
+  <div class="mode-toggle">
+    <button class="mode-btn active" id="btn-live">Live Feed</button>
+    <button class="mode-btn" id="btn-view">View Mode</button>
   </div>
 
-  <div class="stream-url-bar" id="url-bar"></div>
-  <div class="fig-label" id="fig-label"></div>
+  <!-- Live feed container -->
+  <div id="live-container">
+    <div class="stream-box" id="stream-box">
+      <div class="status-overlay" id="status-overlay">
+        <div class="status-cross">
+          <div class="status-cline-h"></div>
+          <div class="status-cline-v"></div>
+        </div>
+        <span class="status-text" id="overlay-text">Acquiring</span>
+      </div>
+      <img id="stream-img" loading="eager" decoding="async" alt="">
+    </div>
+    <div class="stream-url-bar" id="url-bar"></div>
+    <div class="fig-label" id="fig-label"></div>
+  </div>
+
+  <!-- View mode container (hidden by default) -->
+  <div id="view-container" style="display:none;">
+
+    <!-- Collection dropdown (top-right) -->
+    <div class="collection-dropdown" id="collection-dropdown">
+      <button class="btn-ghost" id="btn-collections">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style="vertical-align:-2px;margin-right:4px;"><path d="M1 2h14v2H1zm2 3h10v2H3zm2 3h6v2H5zm2 3h2v2H7z"/></svg>
+        Data Collection Tasks
+      </button>
+      <div class="dropdown-menu" id="collection-menu" style="display:none;">
+        <div id="collection-list"></div>
+        <div class="dropdown-sep"></div>
+        <div id="new-collection-form" style="display:none;padding:8px 12px;">
+          <input type="text" id="new-collection-input" class="input-sm" placeholder="Collection name">
+          <button class="btn-primary-sm" id="btn-create-collection">Create</button>
+        </div>
+        <button class="dropdown-item" id="btn-new-collection" style="color:var(--ink);font-weight:600;">+ New Collection</button>
+      </div>
+    </div>
+
+    <!-- Date range bar -->
+    <div class="date-range-bar">
+      <input type="date" id="date-start">
+      <span>to</span>
+      <input type="date" id="date-end">
+      <button class="btn-ghost" id="btn-load-range">Load</button>
+      <span id="segment-count" class="text-dim" style="margin-left:8px;"></span>
+    </div>
+
+    <!-- Playback area -->
+    <div class="stream-box" id="playback-box">
+      <div class="status-overlay" id="playback-overlay">
+        <div class="status-cross"><div class="status-cline-h"></div><div class="status-cline-v"></div></div>
+        <span class="status-text" id="playback-overlay-text">Select a date range</span>
+      </div>
+      <video id="playback-video" preload="metadata" style="display:none;width:100%;height:100%;object-fit:contain;"></video>
+      <img id="playback-img" style="display:none;width:100%;height:100%;object-fit:contain;" alt="idle frame">
+    </div>
+
+    <!-- Scrubber -->
+    <div class="scrubber-container" id="scrubber-container">
+      <div class="scrubber-track" id="scrubber-track">
+        <!-- Segment blocks rendered dynamically -->
+      </div>
+      <div class="scrubber-handle" id="scrubber-handle" style="left:0;"></div>
+      <!-- Clip selection (hidden until double-click) -->
+      <div class="clip-range" id="clip-range" style="display:none;">
+        <div class="clip-handle clip-start" id="clip-start-handle"></div>
+        <div class="clip-handle clip-end" id="clip-end-handle"></div>
+      </div>
+    </div>
+    <div class="scrubber-times">
+      <span id="scrubber-time-current">--:--:--</span>
+      <span id="scrubber-time-total">--:--:--</span>
+    </div>
+
+    <!-- Playback controls -->
+    <div class="playback-controls">
+      <button class="btn-ghost" id="btn-play">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M4 2l10 6-10 6z"/></svg>
+        Play
+      </button>
+      <button class="btn-ghost" id="btn-pause" style="display:none;">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><rect x="3" y="2" width="4" height="12"/><rect x="9" y="2" width="4" height="12"/></svg>
+        Pause
+      </button>
+      <span class="text-dim" id="time-display"></span>
+    </div>
+
+    <!-- Label & save bar (shown when clip selected) -->
+    <div class="label-bar" id="label-bar" style="display:none;">
+      <div class="clip-info" id="clip-info"></div>
+      <input type="text" id="label-input" class="input-sm" placeholder="Labels (comma separated)">
+      <button class="btn-primary-sm" id="btn-save-clip">Save to Collection</button>
+    </div>
+
+    <!-- Download bar (shown when collection selected) -->
+    <div class="download-bar" id="download-bar" style="display:none;">
+      <span id="download-collection-name"></span>
+      <span class="text-dim" id="download-size"></span>
+      <button class="btn-ghost" id="btn-download">Download</button>
+    </div>
+  </div>
 </main>
 
 <script>
+// ── URL Params ───────────────────────────────────────────────────────────
 function getParam(name){
   return new URLSearchParams(window.location.search).get(name)||'';
 }
 
-const label = getParam('label') || 'Robot Camera';
-const url   = getParam('url');
+const label   = getParam('label') || 'Robot Camera';
+const url     = getParam('url');
+const robotId = getParam('robot_id') || 'reachy-001';
+const apiBase = window.location.hostname === 'localhost'
+  ? 'http://localhost:8080'
+  : 'http://100.81.222.59:8080';
 
-// populate UI labels
+// ── Populate UI labels ───────────────────────────────────────────────────
 document.title = label + ' — Stream Viewer';
 document.getElementById('header-label').textContent = label;
 document.getElementById('main-label').textContent   = label;
 document.getElementById('url-bar').textContent      = url;
 document.getElementById('fig-sub').textContent      = 'live feed';
 document.getElementById('stream-img').alt           = label;
-
 const idx = Math.floor(Math.random()*999)+1;
 document.getElementById('fig-label').textContent = `FIG.${String(idx).padStart(3,'0')} — ${label.toUpperCase()}`;
 
+// ── View state ───────────────────────────────────────────────────────────
+const vs = {
+  mode: 'live',
+  segments: [],
+  timeBounds: null,
+  rangeStartMs: null,
+  rangeEndMs: null,
+  currentSegmentIdx: -1,
+  isPlaying: false,
+  clipSelection: null,    // { startMs, endMs }
+  activeCollection: null, // { id, name }
+  collections: [],
+};
+
+// ── DOM refs ─────────────────────────────────────────────────────────────
+const $liveContainer  = document.getElementById('live-container');
+const $viewContainer  = document.getElementById('view-container');
+const $btnLive        = document.getElementById('btn-live');
+const $btnView        = document.getElementById('btn-view');
+const $dateStart      = document.getElementById('date-start');
+const $dateEnd        = document.getElementById('date-end');
+const $segCount       = document.getElementById('segment-count');
+const $playbackBox    = document.getElementById('playback-box');
+const $playbackOverlay= document.getElementById('playback-overlay');
+const $playbackOvText = document.getElementById('playback-overlay-text');
+const $video          = document.getElementById('playback-video');
+const $img            = document.getElementById('playback-img');
+const $scrubTrack     = document.getElementById('scrubber-track');
+const $scrubHandle    = document.getElementById('scrubber-handle');
+const $clipRange      = document.getElementById('clip-range');
+const $clipStartH     = document.getElementById('clip-start-handle');
+const $clipEndH       = document.getElementById('clip-end-handle');
+const $timeCurrent    = document.getElementById('scrubber-time-current');
+const $timeTotal      = document.getElementById('scrubber-time-total');
+const $btnPlay        = document.getElementById('btn-play');
+const $btnPause       = document.getElementById('btn-pause');
+const $timeDisplay    = document.getElementById('time-display');
+const $labelBar       = document.getElementById('label-bar');
+const $clipInfo       = document.getElementById('clip-info');
+const $labelInput     = document.getElementById('label-input');
+const $collectionMenu = document.getElementById('collection-menu');
+const $collectionList = document.getElementById('collection-list');
+const $downloadBar    = document.getElementById('download-bar');
+
+// ── Helpers ──────────────────────────────────────────────────────────────
+function msToTime(ms) {
+  const d = new Date(ms);
+  return d.toLocaleTimeString('en-GB', { hour12: false });
+}
+function msToDateStr(ms) {
+  return new Date(ms).toISOString().slice(0, 10);
+}
+function formatBytes(bytes) {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1048576) return (bytes/1024).toFixed(1) + ' KB';
+  if (bytes < 1073741824) return (bytes/1048576).toFixed(1) + ' MB';
+  return (bytes/1073741824).toFixed(2) + ' GB';
+}
+
+// ── Mode toggle ──────────────────────────────────────────────────────────
+$btnLive.addEventListener('click', () => switchMode('live'));
+$btnView.addEventListener('click', () => switchMode('view'));
+
+function switchMode(mode) {
+  vs.mode = mode;
+  $btnLive.classList.toggle('active', mode === 'live');
+  $btnView.classList.toggle('active', mode === 'view');
+  $liveContainer.style.display = mode === 'live' ? '' : 'none';
+  $viewContainer.style.display = mode === 'view' ? '' : 'none';
+  document.getElementById('fig-sub').textContent = mode === 'live' ? 'live feed' : 'view mode';
+
+  if (mode === 'view') {
+    fetchCollections();
+    // Default date range: today
+    const today = new Date().toISOString().slice(0, 10);
+    if (!$dateStart.value) $dateStart.value = today;
+    if (!$dateEnd.value)   $dateEnd.value   = today;
+  } else {
+    stopPlayback();
+  }
+}
+
+// ── Live feed (original logic, unchanged) ────────────────────────────────
 if(!url){
   document.getElementById('overlay-text').textContent = 'No URL provided';
   document.getElementById('status-dot').style.background='#a83020';
@@ -133,6 +312,480 @@ if(!url){
 
   img.src=url;
 }
+
+// ── Timeline / segment loading ───────────────────────────────────────────
+document.getElementById('btn-load-range').addEventListener('click', loadTimeline);
+
+async function loadTimeline() {
+  const startDate = $dateStart.value;
+  const endDate   = $dateEnd.value;
+  if (!startDate || !endDate) return;
+
+  const startMs = new Date(startDate).getTime();
+  const endMs   = new Date(endDate + 'T23:59:59.999').getTime();
+  vs.rangeStartMs = startMs;
+  vs.rangeEndMs   = endMs;
+
+  $playbackOvText.textContent = 'Loading...';
+  $playbackOverlay.style.display = 'flex';
+
+  try {
+    const resp = await fetch(`${apiBase}/robots/${robotId}/timeline?start_ms=${startMs}&end_ms=${endMs}&limit=1000`);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    vs.segments   = data.segments;
+    vs.timeBounds = data.time_bounds;
+    $segCount.textContent = `${vs.segments.length} segments`;
+
+    if (vs.segments.length === 0) {
+      $playbackOvText.textContent = 'No data in this range';
+      $scrubTrack.innerHTML = '';
+      return;
+    }
+
+    renderScrubber();
+    $playbackOverlay.style.display = 'none';
+    $timeCurrent.textContent = msToTime(vs.rangeStartMs);
+    $timeTotal.textContent   = msToTime(vs.rangeEndMs);
+
+    // Seek to first segment
+    seekToTimestamp(vs.segments[0].start_ms);
+  } catch (e) {
+    $playbackOvText.textContent = 'Error loading timeline';
+    console.error('Timeline load error:', e);
+  }
+}
+
+// ── Scrubber rendering ───────────────────────────────────────────────────
+function renderScrubber() {
+  $scrubTrack.innerHTML = '';
+  const totalMs = vs.rangeEndMs - vs.rangeStartMs;
+  if (totalMs <= 0) return;
+
+  for (const seg of vs.segments) {
+    const left  = ((seg.start_ms - vs.rangeStartMs) / totalMs) * 100;
+    const width = ((seg.end_ms - seg.start_ms) / totalMs) * 100;
+    const el = document.createElement('div');
+    el.className = `scrubber-segment ${seg.type}`;
+    el.style.left  = Math.max(0, left) + '%';
+    el.style.width = Math.max(0.2, width) + '%';
+    el.title = `${seg.type} | ${msToTime(seg.start_ms)} - ${msToTime(seg.end_ms)}`;
+    $scrubTrack.appendChild(el);
+  }
+}
+
+// ── Scrubber drag ────────────────────────────────────────────────────────
+let scrubDragging = false;
+
+$scrubHandle.addEventListener('mousedown', (e) => { scrubDragging = true; e.preventDefault(); });
+document.addEventListener('mousemove', (e) => {
+  if (!scrubDragging) return;
+  scrubToX(e.clientX);
+});
+document.addEventListener('mouseup', () => { scrubDragging = false; });
+
+$scrubTrack.addEventListener('click', (e) => {
+  if (e.target.classList.contains('clip-handle')) return;
+  scrubToX(e.clientX);
+});
+
+function scrubToX(clientX) {
+  const rect = $scrubTrack.getBoundingClientRect();
+  const pct  = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+  const totalMs = vs.rangeEndMs - vs.rangeStartMs;
+  const ts = vs.rangeStartMs + pct * totalMs;
+  $scrubHandle.style.left = (pct * 100) + '%';
+  $timeCurrent.textContent = msToTime(ts);
+  seekToTimestamp(ts);
+}
+
+// ── Seek to timestamp ────────────────────────────────────────────────────
+function seekToTimestamp(ts) {
+  // Find which segment contains this timestamp
+  let segIdx = -1;
+  for (let i = 0; i < vs.segments.length; i++) {
+    const s = vs.segments[i];
+    if (ts >= s.start_ms && ts <= s.end_ms) { segIdx = i; break; }
+  }
+  // If not in any segment, find nearest
+  if (segIdx === -1) {
+    let minDist = Infinity;
+    for (let i = 0; i < vs.segments.length; i++) {
+      const mid = (vs.segments[i].start_ms + vs.segments[i].end_ms) / 2;
+      const d = Math.abs(ts - mid);
+      if (d < minDist) { minDist = d; segIdx = i; }
+    }
+  }
+  if (segIdx === -1) return;
+
+  const seg = vs.segments[segIdx];
+  vs.currentSegmentIdx = segIdx;
+
+  if (seg.type === 'active') {
+    showVideo(seg, ts);
+  } else {
+    showIdleImage(seg);
+  }
+}
+
+function showVideo(seg, ts) {
+  const videoUrl = `${apiBase}/robots/${robotId}/segments/${seg.id}/video`;
+  $img.style.display = 'none';
+  $video.style.display = 'block';
+
+  // Only reload if different segment
+  if ($video.dataset.segId !== String(seg.id)) {
+    $video.dataset.segId = String(seg.id);
+    $video.src = videoUrl;
+    $video.addEventListener('loadedmetadata', () => {
+      const offset = Math.max(0, (ts - seg.start_ms) / 1000);
+      $video.currentTime = offset;
+    }, { once: true });
+  } else {
+    const offset = Math.max(0, (ts - seg.start_ms) / 1000);
+    $video.currentTime = offset;
+  }
+  $playbackOverlay.style.display = 'none';
+}
+
+function showIdleImage(seg) {
+  const imageUrl = `${apiBase}/robots/${robotId}/segments/${seg.id}/video`;
+  $video.style.display = 'none';
+  $video.pause();
+  $img.style.display = 'block';
+  $img.src = imageUrl;
+  $playbackOverlay.style.display = 'none';
+}
+
+// ── Playback engine ──────────────────────────────────────────────────────
+let playbackTimer = null;
+
+$btnPlay.addEventListener('click', startPlayback);
+$btnPause.addEventListener('click', stopPlayback);
+
+function startPlayback() {
+  vs.isPlaying = true;
+  $btnPlay.style.display = 'none';
+  $btnPause.style.display = '';
+
+  if (vs.clipSelection) {
+    playClipRange();
+  } else {
+    playFromCurrent();
+  }
+}
+
+function stopPlayback() {
+  vs.isPlaying = false;
+  $btnPlay.style.display = '';
+  $btnPause.style.display = 'none';
+  $video.pause();
+  clearTimeout(playbackTimer);
+}
+
+function playFromCurrent() {
+  if (!vs.isPlaying || vs.currentSegmentIdx < 0) return;
+  const seg = vs.segments[vs.currentSegmentIdx];
+
+  if (seg.type === 'active') {
+    showVideo(seg, seg.start_ms);
+    $video.play();
+    $video.onended = () => advanceToNextSegment(vs.currentSegmentIdx + 1);
+    // Update scrubber position during playback
+    $video.ontimeupdate = () => {
+      if (!vs.isPlaying) return;
+      const currentTs = seg.start_ms + $video.currentTime * 1000;
+      updateScrubberPosition(currentTs);
+    };
+  } else {
+    showIdleImage(seg);
+    // Time-compress idle: max(0.5s, min(3s, realDuration/60))
+    const realDur = (seg.end_ms - seg.start_ms) / 1000;
+    const displayDur = Math.max(0.5, Math.min(3, realDur / 60));
+    playbackTimer = setTimeout(() => advanceToNextSegment(vs.currentSegmentIdx + 1), displayDur * 1000);
+  }
+}
+
+function advanceToNextSegment(nextIdx) {
+  if (!vs.isPlaying) return;
+
+  // If playing a clip range, check if we've exceeded the clip end
+  if (vs.clipSelection) {
+    if (nextIdx >= vs.segments.length || vs.segments[nextIdx].start_ms >= vs.clipSelection.endMs) {
+      stopPlayback();
+      return;
+    }
+  }
+
+  if (nextIdx >= vs.segments.length) {
+    stopPlayback();
+    return;
+  }
+
+  vs.currentSegmentIdx = nextIdx;
+  const seg = vs.segments[nextIdx];
+
+  // Skip gaps (jump to next segment)
+  playFromCurrent();
+}
+
+function playClipRange() {
+  if (!vs.clipSelection || !vs.isPlaying) return;
+  const { startMs, endMs } = vs.clipSelection;
+
+  // Find first segment that overlaps clip start
+  let startIdx = vs.segments.findIndex(s => s.end_ms > startMs);
+  if (startIdx === -1) { stopPlayback(); return; }
+
+  vs.currentSegmentIdx = startIdx;
+  const seg = vs.segments[startIdx];
+
+  if (seg.type === 'active') {
+    const seekTs = Math.max(startMs, seg.start_ms);
+    showVideo(seg, seekTs);
+    $video.play();
+    $video.ontimeupdate = () => {
+      if (!vs.isPlaying) return;
+      const currentTs = seg.start_ms + $video.currentTime * 1000;
+      updateScrubberPosition(currentTs);
+      if (currentTs >= endMs) {
+        stopPlayback();
+      } else if (currentTs >= seg.end_ms) {
+        advanceToNextSegment(vs.currentSegmentIdx + 1);
+      }
+    };
+    $video.onended = () => advanceToNextSegment(vs.currentSegmentIdx + 1);
+  } else {
+    showIdleImage(seg);
+    const realDur = (Math.min(seg.end_ms, endMs) - Math.max(seg.start_ms, startMs)) / 1000;
+    const displayDur = Math.max(0.5, Math.min(3, realDur / 60));
+    playbackTimer = setTimeout(() => advanceToNextSegment(vs.currentSegmentIdx + 1), displayDur * 1000);
+  }
+}
+
+function updateScrubberPosition(ts) {
+  const totalMs = vs.rangeEndMs - vs.rangeStartMs;
+  if (totalMs <= 0) return;
+  const pct = (ts - vs.rangeStartMs) / totalMs;
+  $scrubHandle.style.left = (pct * 100) + '%';
+  $timeCurrent.textContent = msToTime(ts);
+}
+
+// ── Clip selection (double-click scrubber) ───────────────────────────────
+$scrubTrack.addEventListener('dblclick', (e) => {
+  const rect = $scrubTrack.getBoundingClientRect();
+  const pct  = (e.clientX - rect.left) / rect.width;
+  const totalMs = vs.rangeEndMs - vs.rangeStartMs;
+  const centerTs = vs.rangeStartMs + pct * totalMs;
+
+  // Default 10-second range centered on click
+  const halfRange = 5000;
+  const startMs = Math.max(vs.rangeStartMs, centerTs - halfRange);
+  const endMs   = Math.min(vs.rangeEndMs, centerTs + halfRange);
+
+  setClipSelection(startMs, endMs);
+});
+
+function setClipSelection(startMs, endMs) {
+  vs.clipSelection = { startMs, endMs };
+  const totalMs = vs.rangeEndMs - vs.rangeStartMs;
+
+  const startPct = ((startMs - vs.rangeStartMs) / totalMs) * 100;
+  const endPct   = ((endMs   - vs.rangeStartMs) / totalMs) * 100;
+
+  $clipRange.style.display = 'block';
+  $clipRange.style.left  = startPct + '%';
+  $clipRange.style.width = (endPct - startPct) + '%';
+
+  $labelBar.style.display = 'flex';
+  $clipInfo.textContent = `Clip: ${msToTime(startMs)} — ${msToTime(endMs)}`;
+}
+
+function clearClipSelection() {
+  vs.clipSelection = null;
+  $clipRange.style.display = 'none';
+  $labelBar.style.display  = 'none';
+}
+
+// Clip handle dragging
+let clipDrag = null; // 'start' | 'end'
+$clipStartH.addEventListener('mousedown', (e) => { clipDrag = 'start'; e.preventDefault(); e.stopPropagation(); });
+$clipEndH.addEventListener('mousedown',   (e) => { clipDrag = 'end';   e.preventDefault(); e.stopPropagation(); });
+document.addEventListener('mousemove', (e) => {
+  if (!clipDrag || !vs.clipSelection) return;
+  const rect = $scrubTrack.getBoundingClientRect();
+  const pct  = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+  const ts   = vs.rangeStartMs + pct * (vs.rangeEndMs - vs.rangeStartMs);
+  if (clipDrag === 'start' && ts < vs.clipSelection.endMs) {
+    setClipSelection(ts, vs.clipSelection.endMs);
+  } else if (clipDrag === 'end' && ts > vs.clipSelection.startMs) {
+    setClipSelection(vs.clipSelection.startMs, ts);
+  }
+});
+document.addEventListener('mouseup', () => { clipDrag = null; });
+
+// Press Escape to clear clip selection
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') clearClipSelection();
+  if (e.key === ' ' && vs.mode === 'view') {
+    e.preventDefault();
+    vs.isPlaying ? stopPlayback() : startPlayback();
+  }
+});
+
+// ── Collection management ────────────────────────────────────────────────
+document.getElementById('btn-collections').addEventListener('click', () => {
+  const vis = $collectionMenu.style.display === 'none';
+  $collectionMenu.style.display = vis ? 'block' : 'none';
+});
+// Close dropdown on outside click
+document.addEventListener('click', (e) => {
+  if (!document.getElementById('collection-dropdown').contains(e.target)) {
+    $collectionMenu.style.display = 'none';
+  }
+});
+
+document.getElementById('btn-new-collection').addEventListener('click', () => {
+  document.getElementById('new-collection-form').style.display = 'flex';
+  document.getElementById('new-collection-input').focus();
+});
+
+document.getElementById('btn-create-collection').addEventListener('click', createCollection);
+document.getElementById('new-collection-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') createCollection();
+});
+
+async function fetchCollections() {
+  try {
+    const resp = await fetch(`${apiBase}/robots/${robotId}/collections`);
+    if (!resp.ok) return;
+    vs.collections = await resp.json();
+    renderCollections();
+  } catch (e) {
+    console.error('Failed to fetch collections:', e);
+  }
+}
+
+function renderCollections() {
+  $collectionList.innerHTML = '';
+  for (const c of vs.collections) {
+    const el = document.createElement('div');
+    el.className = 'dropdown-item' + (vs.activeCollection && vs.activeCollection.id === c.id ? ' selected' : '');
+    el.textContent = `${c.name} (${c.clip_count || 0})`;
+    el.addEventListener('click', () => selectCollection(c));
+    $collectionList.appendChild(el);
+  }
+}
+
+function selectCollection(c) {
+  vs.activeCollection = { id: c.id, name: c.name };
+  renderCollections();
+  $collectionMenu.style.display = 'none';
+  $downloadBar.style.display = 'flex';
+  document.getElementById('download-collection-name').textContent = c.name;
+  fetchDownloadInfo(c.id);
+}
+
+async function createCollection() {
+  const input = document.getElementById('new-collection-input');
+  const name = input.value.trim();
+  if (!name) return;
+
+  try {
+    const resp = await fetch(`${apiBase}/robots/${robotId}/collections`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    if (!resp.ok) {
+      const msg = await resp.text();
+      alert('Error creating collection: ' + msg);
+      return;
+    }
+    const created = await resp.json();
+    input.value = '';
+    document.getElementById('new-collection-form').style.display = 'none';
+    await fetchCollections();
+    selectCollection(created);
+  } catch (e) {
+    console.error('Failed to create collection:', e);
+  }
+}
+
+async function fetchDownloadInfo(collectionId) {
+  try {
+    const resp = await fetch(`${apiBase}/robots/${robotId}/collections/${collectionId}/download-info`);
+    if (!resp.ok) return;
+    const info = await resp.json();
+    document.getElementById('download-size').textContent = `${info.clip_count} clips · ${formatBytes(info.total_bytes)}`;
+  } catch (e) {
+    console.error('Failed to fetch download info:', e);
+  }
+}
+
+// ── Save clip to collection ──────────────────────────────────────────────
+document.getElementById('btn-save-clip').addEventListener('click', saveClip);
+
+async function saveClip() {
+  if (!vs.clipSelection) { alert('Select a clip range first'); return; }
+  if (!vs.activeCollection) { alert('Select a collection first'); return; }
+
+  const { startMs, endMs } = vs.clipSelection;
+  const labels = $labelInput.value.split(',').map(s => s.trim()).filter(Boolean);
+
+  // Find all segments overlapping the clip range
+  const segmentIds = vs.segments
+    .filter(s => s.end_ms > startMs && s.start_ms < endMs)
+    .map(s => s.id);
+
+  if (segmentIds.length === 0) { alert('No segments in selected range'); return; }
+
+  try {
+    const resp = await fetch(`${apiBase}/robots/${robotId}/collections/${vs.activeCollection.id}/clips`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        clip_start_ms: Math.round(startMs),
+        clip_end_ms: Math.round(endMs),
+        segment_ids: segmentIds,
+        labels,
+      }),
+    });
+    if (!resp.ok) {
+      const msg = await resp.text();
+      alert('Error saving clip: ' + msg);
+      return;
+    }
+    $labelInput.value = '';
+    clearClipSelection();
+    fetchDownloadInfo(vs.activeCollection.id);
+    fetchCollections();
+    // Brief visual feedback
+    document.getElementById('btn-save-clip').textContent = 'Saved!';
+    setTimeout(() => { document.getElementById('btn-save-clip').textContent = 'Save to Collection'; }, 1500);
+  } catch (e) {
+    console.error('Failed to save clip:', e);
+    alert('Failed to save clip');
+  }
+}
+
+// ── Download ─────────────────────────────────────────────────────────────
+document.getElementById('btn-download').addEventListener('click', async () => {
+  if (!vs.activeCollection) return;
+  try {
+    const resp = await fetch(`${apiBase}/robots/${robotId}/collections/${vs.activeCollection.id}/clips`);
+    if (!resp.ok) return;
+    const clips = await resp.json();
+    const blob = new Blob([JSON.stringify(clips, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `${vs.activeCollection.name.replace(/\s+/g, '_')}_clips.json`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  } catch (e) {
+    console.error('Download failed:', e);
+  }
+});
 </script>
 </body>
 </html>

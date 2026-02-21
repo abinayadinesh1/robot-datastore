@@ -39,7 +39,7 @@ body {
 }
 .grid-canvas {
   position: absolute; bottom: 0; left: 0; right: 0;
-  height: 65%; perspective: 600px; perspective-origin: 50% 0%;
+  height: 80%; perspective: 600px; perspective-origin: 50% 0%;
 }
 .grid-plane {
   position: absolute; bottom: 0; left: -20%; right: -20%;
@@ -73,12 +73,13 @@ body {
 .grid-fade {
   position: absolute; inset: 0;
   background:
-    linear-gradient(to right, var(--cream) 0%, transparent 15%, transparent 85%, var(--cream) 100%),
+    linear-gradient(to left, transparent 60%, var(--cream) 100%),
+    linear-gradient(to right, transparent 60%, var(--cream) 100%),
     linear-gradient(to bottom, transparent 60%, var(--cream) 100%);
 }
 .grid-topfade {
-  position: absolute; top: 0; left: 0; right: 0; height: 70%;
-  background: linear-gradient(to bottom, var(--cream), transparent);
+  position: absolute; inset: 0;
+  background: linear-gradient(to top, transparent 30%, var(--cream) 100%);
 }
 @keyframes gridScan {
   from { transform: translateY(-100%); }
@@ -249,22 +250,6 @@ body.page-robot main {
   display: flex; flex-direction: column;
   align-items: center; justify-content: center;
   padding: 40px 28px; gap: 20px;
-}
-
-/* ── GRID STAGE (index page — in-flow bottom section) ──────────────────────── */
-.grid-stage {
-  width: 100%;
-  height: 360px;
-  position: relative;
-  overflow: hidden;
-  flex-shrink: 0;
-  border-top: 1px solid var(--border);
-}
-
-/* override the shared fixed-position grid-bg for the index page */
-.grid-stage .grid-bg {
-  position: absolute;
-  inset: 0;
 }
 
 /* ── STREAM GRID (index page) ──────────────────────────────────────────────── */
@@ -531,3 +516,166 @@ body.page-robot main {
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border-hi); }
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   VIEW MODE — scrubber, clips, collections, playback controls
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+/* ── MODE TOGGLE ──────────────────────────────────────────────────────────── */
+.mode-toggle {
+  display: flex; gap: 0; margin: 10px 0 16px;
+}
+.mode-btn {
+  font-family: var(--serif); font-size: 10px; font-weight: 500;
+  letter-spacing: 0.1em; text-transform: uppercase;
+  padding: 6px 18px; border: 1px solid var(--border-hi);
+  background: transparent; color: var(--text-dim); cursor: pointer;
+  transition: all 0.2s;
+}
+.mode-btn:first-child { border-radius: 3px 0 0 3px; }
+.mode-btn:last-child  { border-radius: 0 3px 3px 0; border-left: none; }
+.mode-btn.active {
+  background: var(--ink); color: var(--cream); border-color: var(--ink);
+}
+.mode-btn:hover:not(.active) {
+  border-color: var(--ink); color: var(--text);
+}
+
+/* ── DATE RANGE BAR ──────────────────────────────────────────────────────── */
+.date-range-bar {
+  display: flex; align-items: center; gap: 8px; margin-bottom: 12px;
+  font-family: var(--serif); font-size: 12px; color: var(--text-mid);
+}
+.date-range-bar input[type="date"] {
+  background: var(--cream2); border: 1px solid var(--border-hi);
+  font-family: var(--serif); font-size: 12px; color: var(--text);
+  padding: 4px 8px; border-radius: 3px;
+}
+.date-range-bar input[type="date"]:focus {
+  outline: none; border-color: var(--ink);
+}
+
+/* ── SCRUBBER ─────────────────────────────────────────────────────────────── */
+.scrubber-container {
+  width: 100%; max-width: 50vw; position: relative; height: 36px;
+  margin-top: 10px; user-select: none;
+}
+.scrubber-track {
+  width: 100%; height: 20px; background: var(--cream2);
+  border: 1px solid var(--border); border-radius: 2px;
+  position: relative; overflow: hidden; cursor: pointer;
+}
+.scrubber-segment {
+  position: absolute; top: 0; height: 100%; border-radius: 1px;
+}
+.scrubber-segment.active {
+  background: var(--ink-dim);
+}
+.scrubber-segment.idle {
+  background: var(--ink-faint);
+  background-image: repeating-linear-gradient(
+    45deg, transparent, transparent 3px,
+    rgba(200,90,58,0.1) 3px, rgba(200,90,58,0.1) 6px
+  );
+}
+.scrubber-handle {
+  position: absolute; top: -2px; width: 2px; height: 24px;
+  background: #a83020; cursor: ew-resize; z-index: 10;
+  transition: left 0.05s linear;
+}
+.scrubber-handle::before {
+  content: ''; position: absolute; top: -4px; left: -4px;
+  width: 10px; height: 10px; border-radius: 50%;
+  background: #a83020;
+}
+.scrubber-times {
+  display: flex; justify-content: space-between; max-width: 50vw;
+  font-family: 'IBM Plex Mono', monospace; font-size: 10px;
+  color: var(--text-dim); margin-top: 2px;
+}
+
+/* ── CLIP SELECTION ───────────────────────────────────────────────────────── */
+.clip-range {
+  position: absolute; top: 0; height: 20px;
+  background: rgba(168,48,32,0.15);
+  border-left: 2px solid #a83020; border-right: 2px solid #a83020;
+  z-index: 5; pointer-events: none;
+}
+.clip-handle {
+  position: absolute; top: -4px; width: 12px; height: 28px;
+  cursor: ew-resize; z-index: 11; pointer-events: all;
+}
+.clip-handle::after {
+  content: ''; position: absolute; top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  width: 6px; height: 16px; border-radius: 2px;
+  background: #a83020;
+}
+.clip-handle.clip-start { left: -7px; }
+.clip-handle.clip-end   { right: -7px; }
+
+/* ── PLAYBACK CONTROLS ───────────────────────────────────────────────────── */
+.playback-controls {
+  display: flex; align-items: center; gap: 12px; margin-top: 8px;
+  font-family: var(--serif); font-size: 12px; color: var(--text-mid);
+}
+
+/* ── LABEL BAR ───────────────────────────────────────────────────────────── */
+.label-bar {
+  display: flex; align-items: center; gap: 8px; margin-top: 12px;
+  max-width: 50vw;
+}
+.clip-info {
+  font-family: 'IBM Plex Mono', monospace; font-size: 11px;
+  color: var(--text-mid); white-space: nowrap;
+}
+.input-sm {
+  flex: 1; padding: 5px 10px; border: 1px solid var(--border-hi);
+  background: var(--cream2); font-family: var(--serif); font-size: 12px;
+  color: var(--text); border-radius: 3px;
+}
+.input-sm:focus { outline: none; border-color: var(--ink); }
+.btn-primary-sm {
+  padding: 5px 14px; border: none; border-radius: 3px;
+  background: var(--ink); color: var(--cream);
+  font-family: var(--serif); font-size: 11px; font-weight: 500;
+  letter-spacing: 0.06em; cursor: pointer; white-space: nowrap;
+}
+.btn-primary-sm:hover { filter: brightness(1.1); }
+
+/* ── DOWNLOAD BAR ─────────────────────────────────────────────────────────── */
+.download-bar {
+  display: flex; align-items: center; gap: 12px; margin-top: 10px;
+  font-family: var(--serif); font-size: 12px; color: var(--text);
+  max-width: 50vw;
+}
+
+/* ── COLLECTION DROPDOWN ─────────────────────────────────────────────────── */
+.collection-dropdown {
+  position: absolute; top: 70px; right: 28px; z-index: 100;
+}
+.dropdown-menu {
+  background: var(--cream); border: 1px solid var(--border-hi);
+  box-shadow: 4px 4px 0 var(--ink-dim); padding: 4px 0;
+  min-width: 220px; border-radius: 3px;
+}
+.dropdown-sep {
+  height: 1px; background: var(--border); margin: 4px 0;
+}
+.dropdown-item {
+  padding: 7px 14px; font-family: var(--serif); font-size: 12px;
+  cursor: pointer; transition: background 0.12s; display: block;
+  color: var(--text);
+}
+.dropdown-item:hover { background: var(--ink-faint); }
+.dropdown-item.selected {
+  color: var(--ink); font-weight: 600;
+}
+.dropdown-item.selected::before {
+  content: '\2713 '; font-weight: 400;
+}
+
+/* ── TEXT HELPERS ──────────────────────────────────────────────────────────── */
+.text-dim {
+  font-family: var(--serif); font-size: 11px; color: var(--text-dim);
+}

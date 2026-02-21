@@ -7,7 +7,7 @@ use aws_types::region::Region;
 use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Redirect};
-use axum::routing::{delete, get, patch, post};
+use axum::routing::{delete, get};
 use axum::{Json, Router};
 use frame_bucket_common::config::Config;
 use rusqlite::{params, Connection};
@@ -674,21 +674,23 @@ async fn create_clip(
         // Get segment metadata for all referenced segments
         let mut segments = Vec::new();
         for seg_id in &seg_ids {
-            let mut stmt = conn.prepare(
+            let result = conn.query_row(
                 "SELECT id, type, start_ms, end_ms, s3_key, size_bytes
                  FROM segments WHERE id = ?1 AND robot_id = ?2",
-            )?;
-            if let Some(seg) = stmt.query_map(params![seg_id, rid], |row| {
-                Ok(SegmentInfo {
-                    segment_id: row.get(0)?,
-                    segment_type: row.get(1)?,
-                    start_ms: row.get(2)?,
-                    end_ms: row.get(3)?,
-                    source_key: row.get(4)?,
-                    size_bytes: row.get::<_, Option<i64>>(5)?,
-                })
-            })?.next() {
-                segments.push(seg?);
+                params![seg_id, rid],
+                |row| {
+                    Ok(SegmentInfo {
+                        segment_id: row.get(0)?,
+                        segment_type: row.get(1)?,
+                        start_ms: row.get(2)?,
+                        end_ms: row.get(3)?,
+                        source_key: row.get(4)?,
+                        size_bytes: row.get::<_, Option<i64>>(5)?,
+                    })
+                },
+            );
+            if let Ok(seg) = result {
+                segments.push(seg);
             }
         }
 
