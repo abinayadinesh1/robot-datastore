@@ -203,15 +203,20 @@ async fn list_segments(
     let result = tokio::task::spawn_blocking(move || -> rusqlite::Result<Vec<Segment>> {
         let conn = open_robot_db(&db_dir, &robot_id)?;
 
-        let mut wheres: Vec<&str> = vec!["robot_id = ?1"];
-        if q.start_ms.is_some() {
-            wheres.push("end_ms >= ?2");
+        let mut wheres: Vec<String> = vec!["robot_id = ?".into()];
+        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = vec![Box::new(robot_id)];
+
+        if let Some(start_ms) = q.start_ms {
+            param_values.push(Box::new(start_ms));
+            wheres.push(format!("end_ms >= ?{}", param_values.len()));
         }
-        if q.end_ms.is_some() {
-            wheres.push("start_ms <= ?3");
+        if let Some(end_ms) = q.end_ms {
+            param_values.push(Box::new(end_ms));
+            wheres.push(format!("start_ms <= ?{}", param_values.len()));
         }
-        if q.segment_type.is_some() {
-            wheres.push("type = ?4");
+        if let Some(ref seg_type) = q.segment_type {
+            param_values.push(Box::new(seg_type.clone()));
+            wheres.push(format!("type = ?{}", param_values.len()));
         }
         let limit_clause = format!("LIMIT {}", q.limit.unwrap_or(100).min(1000));
         let sql = format!(
@@ -224,16 +229,9 @@ async fn list_segments(
             limit_clause
         );
 
+        let params: Vec<&dyn rusqlite::types::ToSql> = param_values.iter().map(|p| p.as_ref()).collect();
         let mut stmt = conn.prepare(&sql)?;
-        let rows = stmt.query_map(
-            params![
-                robot_id,
-                q.start_ms.unwrap_or(i64::MIN),
-                q.end_ms.unwrap_or(i64::MAX),
-                q.segment_type.as_deref().unwrap_or(""),
-            ],
-            row_to_segment,
-        )?;
+        let rows = stmt.query_map(params.as_slice(), row_to_segment)?;
         rows.collect()
     })
     .await;
@@ -382,12 +380,16 @@ async fn get_timeline(
         })?;
 
         // Get segments in range
-        let mut wheres: Vec<&str> = vec!["robot_id = ?1"];
-        if q.start_ms.is_some() {
-            wheres.push("end_ms >= ?2");
+        let mut wheres: Vec<String> = vec!["robot_id = ?".into()];
+        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = vec![Box::new(robot_id)];
+
+        if let Some(start_ms) = q.start_ms {
+            param_values.push(Box::new(start_ms));
+            wheres.push(format!("end_ms >= ?{}", param_values.len()));
         }
-        if q.end_ms.is_some() {
-            wheres.push("start_ms <= ?3");
+        if let Some(end_ms) = q.end_ms {
+            param_values.push(Box::new(end_ms));
+            wheres.push(format!("start_ms <= ?{}", param_values.len()));
         }
         let limit_clause = format!("LIMIT {}", q.limit.unwrap_or(500).min(1000));
         let sql = format!(
@@ -400,15 +402,9 @@ async fn get_timeline(
             limit_clause
         );
 
+        let params: Vec<&dyn rusqlite::types::ToSql> = param_values.iter().map(|p| p.as_ref()).collect();
         let mut stmt = conn.prepare(&sql)?;
-        let rows = stmt.query_map(
-            params![
-                robot_id,
-                q.start_ms.unwrap_or(i64::MIN),
-                q.end_ms.unwrap_or(i64::MAX),
-            ],
-            row_to_segment,
-        )?;
+        let rows = stmt.query_map(params.as_slice(), row_to_segment)?;
         let segments: rusqlite::Result<Vec<Segment>> = rows.collect();
 
         Ok(TimelineResponse {
