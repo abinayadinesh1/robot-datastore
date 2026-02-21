@@ -51,6 +51,8 @@ impl SegmentEncoder {
 
         let fps_str = fps.to_string();
         let crf_str = crf.to_string();
+        // Keyframe every 1 second (= fps frames) for sub-second scrubbing precision
+        let gop_str = (fps.round() as u32).max(1).to_string();
 
         let mut cmd = Command::new("ffmpeg");
         cmd.args([
@@ -61,6 +63,7 @@ impl SegmentEncoder {
             "-c:v", vcodec,
             "-preset", preset,
             "-crf", &crf_str,
+            "-g", &gop_str,
             "-movflags", "+faststart",
             "-y",
             output_path.to_str().unwrap(),

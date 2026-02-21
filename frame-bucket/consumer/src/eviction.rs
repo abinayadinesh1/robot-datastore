@@ -23,37 +23,15 @@ pub async fn run_eviction_loop(
     let threshold_bytes = (eviction_config.threshold_gb * 1_073_741_824.0) as u64;
     let target_bytes = (eviction_config.target_gb * 1_073_741_824.0) as u64;
 
-    // Read persisted stats from disk to account for pre-existing data from before this restart.
-    let mut baseline_bytes: u64 = 0;
-    let mut baseline_objects: usize = 0;
-    if let Some((objects, total_bytes)) = read_stats_file(&stats_path) {
-        if objects > 0 {
-            baseline_objects = objects;
-            baseline_bytes = total_bytes;
-            info!(
-                objects = baseline_objects,
-                total_gb = format!("{:.3}", baseline_bytes as f64 / 1_073_741_824.0),
-                "loaded persisted storage stats from disk"
-            );
-        }
-    }
-
-    // If the stats file was missing, empty, or stale (0 objects), scan the bucket to bootstrap.
-    if baseline_objects == 0 {
-        info!("stats file missing or empty, scanning bucket to bootstrap");
-        let (count, bytes) = storage.bucket_stats().await;
-        if count > 0 {
-            baseline_objects = count;
-            baseline_bytes = bytes;
-            info!(
-                objects = baseline_objects,
-                total_gb = format!("{:.3}", baseline_bytes as f64 / 1_073_741_824.0),
-                "bootstrapped storage stats from bucket scan"
-            );
-            // Persist so next restart doesn't need to scan again.
-            write_stats_file(&stats_path, baseline_objects, baseline_bytes);
-        }
-    }
+    // Always scan the bucket on startup to get the true baseline.
+    // The stats file may be stale (only tracked session objects, not the full bucket).
+    let (mut baseline_objects, mut baseline_bytes) = storage.bucket_stats().await;
+    info!(
+        objects = baseline_objects,
+        total_gb = format!("{:.3}", baseline_bytes as f64 / 1_073_741_824.0),
+        "scanned bucket for baseline storage stats"
+    );
+    write_stats_file(&stats_path, baseline_objects, baseline_bytes);
 
     loop {
         tokio::time::sleep(interval).await;
@@ -138,28 +116,6 @@ pub async fn run_eviction_loop(
             }
         }
     }
-}
-
-/// Read the persistent stats file. Returns (objects, total_bytes) or None.
-fn read_stats_file(path: &Path) -> Option<(usize, u64)> {
-    let content = std::fs::read_to_string(path).ok()?;
-    let objects = parse_json_u64(&content, "objects")? as usize;
-    let total_bytes = parse_json_u64(&content, "total_bytes")?;
-    Some((objects, total_bytes))
-}
-
-/// Extract a u64 value for a given key from a flat JSON object.
-fn parse_json_u64(json: &str, key: &str) -> Option<u64> {
-    let needle = format!("\"{}\":", key);
-    let pos = json.find(&needle)? + needle.len();
-    let rest = json[pos..].trim_start();
-    let end = rest
-        .find(|c: char| !c.is_ascii_digit())
-        .unwrap_or(rest.len());
-    if end == 0 {
-        return None;
-    }
-    rest[..end].parse().ok()
 }
 
 /// Write a simple JSON stats file to disk.
