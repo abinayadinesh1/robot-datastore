@@ -162,9 +162,7 @@ function getParam(name){
 const label   = getParam('label') || 'Robot Camera';
 const url     = getParam('url');
 const robotId = getParam('robot_id') || 'reachy-001';
-const apiBase = ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname)
-  ? 'http://localhost:8080'
-  : 'http://100.81.222.59:8080';
+const apiBase = 'http://100.81.222.59:8080';
 
 // ── Populate UI labels ───────────────────────────────────────────────────
 document.title = label + ' — Stream Viewer';

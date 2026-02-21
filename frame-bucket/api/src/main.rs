@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use aws_credential_types::Credentials;
+use aws_sdk_s3::presigning::PresigningConfig;
 use aws_sdk_s3::primitives::ByteStream;
 use aws_types::region::Region;
 use axum::extract::{Path as AxumPath, Query, State};
@@ -21,6 +22,7 @@ use tracing::{error, info, warn};
 
 struct AppState {
     db_dir: PathBuf,
+    #[allow(dead_code)]
     rustfs_public_url: String,
     rustfs_bucket: String,
     s3_client: aws_sdk_s3::Client,
@@ -297,14 +299,32 @@ async fn video_redirect(
 
     match result {
         Ok(Ok(Some(s3_key))) => {
-            let url = format!(
-                "{}/{}/{}",
-                state.rustfs_public_url.trim_end_matches('/'),
-                state.rustfs_bucket,
-                s3_key.trim_start_matches('/')
-            );
-            info!(url, "redirecting to RustFS object");
-            Redirect::temporary(&url).into_response()
+            // Generate a presigned URL so the browser can fetch directly from RustFS
+            let presign_config = match PresigningConfig::expires_in(std::time::Duration::from_secs(3600)) {
+                Ok(c) => c,
+                Err(e) => {
+                    error!(error = %e, "failed to create presigning config");
+                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                }
+            };
+            let presigned = state
+                .s3_client
+                .get_object()
+                .bucket(&state.rustfs_bucket)
+                .key(s3_key.trim_start_matches('/'))
+                .presigned(presign_config)
+                .await;
+            match presigned {
+                Ok(req) => {
+                    let url = req.uri().to_string();
+                    info!(url, "redirecting to presigned RustFS URL");
+                    Redirect::temporary(&url).into_response()
+                }
+                Err(e) => {
+                    error!(error = %e, "failed to generate presigned URL");
+                    StatusCode::INTERNAL_SERVER_ERROR.into_response()
+                }
+            }
         }
         Ok(Ok(None)) => StatusCode::NOT_FOUND.into_response(),
         Ok(Err(e)) => {
