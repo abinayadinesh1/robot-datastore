@@ -1186,7 +1186,12 @@ dependencies = [
 name = "frame-bucket-api"
 version = "0.1.0"
 dependencies = [
+ "aws-config",
+ "aws-credential-types",
+ "aws-sdk-s3",
+ "aws-types",
  "axum",
+ "chrono",
  "frame-bucket-common",
  "rusqlite",
  "serde",
@@ -1224,6 +1229,7 @@ dependencies = [
  "image",
  "rdkafka",
  "rusqlite",
+ "serde",
  "sysinfo",
  "thiserror",
  "tokio",

@@ -236,6 +236,42 @@ impl RustfsStorage {
         (count, bytes)
     }
 
+    /// Scan the entire bucket and return (object_count, total_bytes).
+    /// Used once at startup to bootstrap stats when the persistent stats file is stale or missing.
+    pub async fn bucket_stats(&self) -> (usize, u64) {
+        let mut count: usize = 0;
+        let mut total_bytes: u64 = 0;
+        let mut continuation_token: Option<String> = None;
+
+        loop {
+            let mut req = self.client.list_objects_v2().bucket(&self.bucket);
+            if let Some(token) = &continuation_token {
+                req = req.continuation_token(token);
+            }
+
+            let resp = match req.send().await {
+                Ok(r) => r,
+                Err(e) => {
+                    warn!(error = %e, "failed to scan bucket for stats");
+                    return (count, total_bytes);
+                }
+            };
+
+            for obj in resp.contents() {
+                count += 1;
+                total_bytes += obj.size().unwrap_or(0) as u64;
+            }
+
+            if resp.is_truncated() == Some(true) {
+                continuation_token = resp.next_continuation_token().map(|s| s.to_string());
+            } else {
+                break;
+            }
+        }
+
+        (count, total_bytes)
+    }
+
     /// List the N oldest objects directly from the bucket (by lexicographic key order).
     /// Used for eviction when the in-memory index may not have pre-existing objects.
     pub async fn list_oldest_from_bucket(&self, n: usize) -> Vec<(String, u64, i64)> {

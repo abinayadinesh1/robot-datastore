@@ -247,6 +247,12 @@ pub struct ApiConfig {
     pub rustfs_public_url: String,
     #[serde(default = "default_rustfs_bucket")]
     pub rustfs_bucket: String,
+    #[serde(default = "default_labelled_data_bucket")]
+    pub labelled_data_bucket: String,
+}
+
+fn default_labelled_data_bucket() -> String {
+    "labelled-data".into()
 }
 
 impl Default for ApiConfig {
@@ -255,6 +261,7 @@ impl Default for ApiConfig {
             port: default_api_port(),
             rustfs_public_url: default_rustfs_public_url(),
             rustfs_bucket: default_rustfs_bucket(),
+            labelled_data_bucket: default_labelled_data_bucket(),
         }
     }
 }

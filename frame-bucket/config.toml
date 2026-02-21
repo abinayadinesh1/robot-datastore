@@ -45,6 +45,7 @@ path = "data/"   # directory where {robot_id}.db SQLite files are created
 port = 8080
 rustfs_public_url = "http://100.81.222.59:9000"   # URL clients use to reach RustFS
 rustfs_bucket = "camera-frames"
+labelled_data_bucket = "labelled-data"             # bucket for saved clip manifests
 
 [recording]
 segment_duration_secs = 60

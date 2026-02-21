@@ -27,13 +27,32 @@ pub async fn run_eviction_loop(
     let mut baseline_bytes: u64 = 0;
     let mut baseline_objects: usize = 0;
     if let Some((objects, total_bytes)) = read_stats_file(&stats_path) {
-        baseline_objects = objects;
-        baseline_bytes = total_bytes;
-        info!(
-            objects = baseline_objects,
-            total_gb = format!("{:.3}", baseline_bytes as f64 / 1_073_741_824.0),
-            "loaded persisted storage stats from disk"
-        );
+        if objects > 0 {
+            baseline_objects = objects;
+            baseline_bytes = total_bytes;
+            info!(
+                objects = baseline_objects,
+                total_gb = format!("{:.3}", baseline_bytes as f64 / 1_073_741_824.0),
+                "loaded persisted storage stats from disk"
+            );
+        }
+    }
+
+    // If the stats file was missing, empty, or stale (0 objects), scan the bucket to bootstrap.
+    if baseline_objects == 0 {
+        info!("stats file missing or empty, scanning bucket to bootstrap");
+        let (count, bytes) = storage.bucket_stats().await;
+        if count > 0 {
+            baseline_objects = count;
+            baseline_bytes = bytes;
+            info!(
+                objects = baseline_objects,
+                total_gb = format!("{:.3}", baseline_bytes as f64 / 1_073_741_824.0),
+                "bootstrapped storage stats from bucket scan"
+            );
+            // Persist so next restart doesn't need to scan again.
+            write_stats_file(&stats_path, baseline_objects, baseline_bytes);
+        }
     }
 
     loop {
