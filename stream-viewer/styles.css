@@ -241,6 +241,44 @@ header {
   letter-spacing: 0.12em; text-transform: uppercase;
 }
 
+/* ── HEALTH PANEL (in info bar) ────────────────────────────────────────────── */
+.health-panel {
+  display: flex; align-items: center; gap: 12px;
+}
+.health-item {
+  display: flex; align-items: center; gap: 6px;
+}
+.health-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--text-dim);
+  transition: background 0.3s;
+  flex-shrink: 0;
+}
+.health-dot.green  { background: var(--green); }
+.health-dot.amber  { background: var(--amber); }
+.health-dot.red    { background: #a83020; }
+.health-detail {
+  display: flex; flex-direction: column; gap: 1px;
+}
+.health-label {
+  font-family: var(--serif); font-size: 9px; font-weight: 500;
+  color: var(--text-mid); letter-spacing: 0.12em; text-transform: uppercase;
+  line-height: 1;
+}
+.health-sub {
+  font-family: var(--serif); font-size: 9px; font-weight: 400;
+  color: var(--text-dim); letter-spacing: 0.08em;
+  line-height: 1;
+}
+.health-sep {
+  width: 1px; height: 20px; background: var(--border);
+}
+.health-usage {
+  font-family: var(--serif); font-size: 11px; font-weight: 600;
+  color: var(--ink); letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
 /* ── MAIN — page-specific layouts ──────────────────────────────────────────── */
 body.page-index main {
   flex: 1; padding: 20px 28px 36px;
@@ -317,7 +355,7 @@ body.page-robot main {
   position: relative; flex: 1; background: #1a0f0a;
   display: flex; align-items: center; justify-content: center; overflow: hidden;
 }
-.tile-body img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.tile-body img, .tile-body video { width: 100%; height: 100%; object-fit: contain; display: block; }
 
 .tile-footer {
   display: flex; align-items: center; justify-content: space-between;

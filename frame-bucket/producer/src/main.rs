@@ -1,3 +1,4 @@
+mod h264;
 mod mjpeg;
 
 use frame_bucket_common::config::Config;
@@ -15,6 +16,10 @@ pub enum ProducerError {
     HttpStream(reqwest::Error),
     #[error("HTTP status {0}")]
     HttpStatus(u16),
+    #[error("TCP connection failed: {0}")]
+    TcpConnect(String),
+    #[error("TCP stream error: {0}")]
+    TcpStream(String),
     #[error("config error: {0}")]
     Config(#[from] frame_bucket_common::config::ConfigError),
 }
@@ -69,6 +74,7 @@ async fn main() {
             );
             mjpeg::run_mjpeg_producer(&url, &config.kafka.topic, &producer, robot_id).await.ok();
         }
+        // hitting the /api/camera/frame endpoint instead of keeping an HTTP connection, only good as a fallback
         "polling" => {
             let url = format!(
                 "{}?quality={}",
@@ -80,8 +86,18 @@ async fn main() {
                 .await
                 .ok();
         }
+        "h264" => {
+            let addr = config.stream.h264_url
+                .as_deref()
+                .unwrap_or_else(|| {
+                    error!("h264_url is required when mode = \"h264\"");
+                    std::process::exit(1);
+                });
+            info!(addr, "using H.264 TCP mode");
+            h264::run_h264_producer(addr, &config.kafka.topic, &producer, robot_id).await.ok();
+        }
         other => {
-            error!(mode = other, "unknown stream mode, expected 'mjpeg' or 'polling'");
+            error!(mode = other, "unknown stream mode, expected 'mjpeg', 'polling', or 'h264'");
             std::process::exit(1);
         }
     }

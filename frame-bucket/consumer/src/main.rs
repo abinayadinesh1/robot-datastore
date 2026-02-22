@@ -93,6 +93,7 @@ async fn main() {
         config.recording.clone(),
         config.filter.phash_threshold,
         config.filter.phash_hash_size,
+        config.filter.spike_ratio,
         Arc::clone(&rustfs_storage),
         segment_db,
         config.rustfs.prefix.clone(),

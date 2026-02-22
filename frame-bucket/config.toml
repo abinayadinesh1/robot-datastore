@@ -7,14 +7,16 @@ compression = "snappy"
 [stream]
 url = "http://100.107.96.29:8000/api/camera/stream"
 quality = 80
-fps = 10.0
-mode = "mjpeg"   # "mjpeg" or "polling"
+fps = 30.0
+mode = "h264"       # "mjpeg", "polling", or "h264"
+h264_url = "100.107.96.29:9001"  # robot's TCP H.264 MPEG-TS endpoint
 
 [filter]
-primary = "phash"
+primary = "framesize"       # "phash", "histogram", or "framesize" (for H.264)
 phash_threshold = 26        # hamming distance (out of 256 bits) - 26, ~10% difference
 phash_hash_size = 16
 histogram_threshold = 0.15  # chi-squared distance
+spike_ratio = 4.0           # P-frame size spike detection threshold for framesize filter
 
 [rustfs]
 endpoint = "http://100.81.222.59:9000"
@@ -25,9 +27,10 @@ prefix = ""   # keys.rs builds the full path: {robot_id}/camera/{date}/...
 
 [eviction]
 check_interval_secs = 30
-threshold_gb = 5   # evict when local RustFS storage exceeds this
-target_gb = 1      # evict until storage drops below this
+threshold_gb = 5           # evict to S3 when local RustFS storage exceeds this
+target_gb = 1              # evict until storage drops below this
 batch_size = 50
+fallback_threshold_gb = 50 # in fallback (S3 down), only delete locally above this — keeps data as long as possible
 
 [aws_s3]
 bucket = "reachy-mini-frames-archive"
@@ -52,5 +55,5 @@ segment_duration_secs = 60
 codec = "h264"       # "h264" or "h265"
 crf = 23             # quality: lower = better, 18-28 is typical range
 preset = "fast"      # encoding speed: ultrafast, superfast, veryfast, faster, fast, medium, slow
-fps = 10.0
+fps = 30.0
 active_to_idle_consecutive_frames = 70  # how many similar frames trigger idle transition

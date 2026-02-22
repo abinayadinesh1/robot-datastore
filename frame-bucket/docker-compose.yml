@@ -13,6 +13,11 @@ services:
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_MESSAGE_MAX_BYTES: 1048576
+      # Retention: keep data for 24 hours OR up to 5GB, whichever is hit first
+      KAFKA_LOG_RETENTION_HOURS: 24
+      KAFKA_LOG_RETENTION_BYTES: 5368709120
+      KAFKA_LOG_SEGMENT_BYTES: 104857600
+      KAFKA_LOG_CLEANUP_POLICY: delete
       CLUSTER_ID: "frame-bucket-kafka-cluster-01"
 
   rustfs:

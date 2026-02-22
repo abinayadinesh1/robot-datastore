@@ -6,6 +6,7 @@
 <title>Stream Viewer</title>
 <link href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,500;0,700;0,800;1,400;1,500&family=IBM+Plex+Mono:wght@300;400;500;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css">
+<script src="webrtc.js"></script>
 </head>
 <body class="page-index">
 
@@ -83,6 +84,33 @@
       <span class="info-key">Date</span>
     </div>
   </div>
+  <div class="health-panel" id="health-panel" style="display:none;">
+    <div class="health-item">
+      <div class="health-dot" id="health-rustfs-dot"></div>
+      <div class="health-detail">
+        <span class="health-label">RustFS</span>
+        <span class="health-sub" id="health-rustfs-text">--</span>
+      </div>
+    </div>
+    <div class="health-sep"></div>
+    <div class="health-item">
+      <div class="health-dot" id="health-s3-dot"></div>
+      <div class="health-detail">
+        <span class="health-label">S3 Archive</span>
+        <span class="health-sub" id="health-s3-text">--</span>
+      </div>
+    </div>
+    <div class="health-sep"></div>
+    <div class="health-usage" id="health-usage">-- / -- GB</div>
+    <div class="health-sep"></div>
+    <div class="health-item">
+      <div class="health-dot" id="health-disk-dot"></div>
+      <div class="health-detail">
+        <span class="health-label">Disk</span>
+        <span class="health-sub" id="health-disk-text">--</span>
+      </div>
+    </div>
+  </div>
   <div class="info-right" id="sys-label"></div>
 </div>
 
@@ -135,9 +163,78 @@ const $=id=>document.getElementById(id);
 function save(){localStorage.setItem(STORAGE_KEY,JSON.stringify(state.streams));localStorage.setItem(NEXT_ID_KEY,state.nextId);}
 async function loadInitial(){
   const saved=localStorage.getItem(STORAGE_KEY);
-  if(saved){try{state.streams=JSON.parse(saved);state.nextId=parseInt(localStorage.getItem(NEXT_ID_KEY)||'1',10);return;}catch(_){}}
-  try{const res=await fetch('sources.json');const data=await res.json();if(Array.isArray(data.streams)){data.streams.forEach(s=>state.streams.push({id:state.nextId++,label:s.label||'Camera',url:s.url,robot_id:s.robot_id||'reachy-001'}));save();return;}}catch(_){}
-  state.streams.push({id:state.nextId++,label:'Front Camera',url:DEFAULT_URL});save();
+  if(saved){try{state.streams=JSON.parse(saved);state.nextId=parseInt(localStorage.getItem(NEXT_ID_KEY)||'1',10);}catch(_){}}
+  try{
+    const res=await fetch('sources.json');const data=await res.json();
+    if(data.api_url) initHealthPolling(data.api_url);
+    if(!saved && Array.isArray(data.streams)){data.streams.forEach(s=>state.streams.push({id:state.nextId++,label:s.label||'Camera',url:s.url,robot_id:s.robot_id||'reachy-001'}));save();}
+  }catch(_){ initHealthPolling(); }
+  if(state.streams.length===0){state.streams.push({id:state.nextId++,label:'Front Camera',url:DEFAULT_URL});save();}
+}
+
+/* ── HEALTH POLLING ─────────────────────────────────────────────────────── */
+let HEALTH_API='http://100.81.222.59:8080';
+function initHealthPolling(apiUrl){
+  HEALTH_API=apiUrl||HEALTH_API;
+  fetchHealth();
+  setInterval(fetchHealth,15000);
+}
+async function fetchHealth(){
+  const panel=$('health-panel');
+  try{
+    const res=await fetch(HEALTH_API+'/health',{signal:AbortSignal.timeout(5000)});
+    if(!res.ok)throw new Error('HTTP '+res.status);
+    const h=await res.json();
+    panel.style.display='flex';
+    updateHealthPanel(h);
+  }catch(e){
+    panel.style.display='flex';
+    setHealthDot('health-rustfs-dot','');
+    setHealthDot('health-s3-dot','');
+    $('health-rustfs-text').textContent='no data';
+    $('health-s3-text').textContent='no data';
+    $('health-usage').textContent='API unreachable';
+    setHealthDot('health-disk-dot','');
+    $('health-disk-text').textContent='no data';
+  }
+}
+function setHealthDot(id,color){
+  const el=$(id);el.classList.remove('green','amber','red');
+  if(color)el.classList.add(color);
+}
+function updateHealthPanel(h){
+  const rustfs=h.rustfs||{},storage=h.storage||{},eviction=h.eviction||{},s3=h.s3||{},disk=h.disk||{};
+  // RustFS dot
+  if(rustfs.status==='critical'||eviction.state==='fallback') setHealthDot('health-rustfs-dot','red');
+  else if(rustfs.status==='pressure'||eviction.state==='evicting') setHealthDot('health-rustfs-dot','amber');
+  else setHealthDot('health-rustfs-dot','green');
+  // RustFS text
+  const rTexts={healthy:'nominal',pressure:'high usage',critical:'CRITICAL'};
+  let rText=rTexts[rustfs.status]||rustfs.status||'--';
+  if(eviction.state==='evicting')rText='evicting';
+  if(eviction.state==='fallback')rText='FALLBACK';
+  $('health-rustfs-text').textContent=rText;
+  // S3 dot
+  if(s3.status==='unavailable'||eviction.fallback_mode) setHealthDot('health-s3-dot','red');
+  else if(s3.status==='degraded') setHealthDot('health-s3-dot','amber');
+  else setHealthDot('health-s3-dot','green');
+  // S3 text
+  const sTexts={healthy:'archiving',degraded:'some failures',unavailable:'OFFLINE'};
+  $('health-s3-text').textContent=sTexts[s3.status]||s3.status||'--';
+  // RustFS storage usage
+  const usedGb=(storage.total_gb||0).toFixed(1);
+  const threshGb=(storage.threshold_gb||0).toFixed(0);
+  $('health-usage').textContent=usedGb+' / '+threshGb+' GB';
+  // Host disk
+  if(disk.status){
+    if(disk.status==='critical') setHealthDot('health-disk-dot','red');
+    else if(disk.status==='pressure') setHealthDot('health-disk-dot','amber');
+    else setHealthDot('health-disk-dot','green');
+    $('health-disk-text').textContent=(disk.used_gb||0).toFixed(0)+' / '+(disk.total_gb||0).toFixed(0)+' GB ('+( disk.usage_pct||0).toFixed(0)+'%)';
+  }else{
+    setHealthDot('health-disk-dot','');
+    $('health-disk-text').textContent='--';
+  }
 }
 
 function tickClock(){
@@ -184,21 +281,20 @@ function createTile(stream,idx){
       <div class="status-cline-v"></div>
     </div>
     <span class="status-text">Acquiring</span>`;
-  const img=document.createElement('img');img.alt=stream.label;img.loading='eager';
-  body.appendChild(overlay);body.appendChild(img);
+  const video=document.createElement('video');video.autoplay=true;video.playsInline=true;video.muted=true;
+  body.appendChild(overlay);body.appendChild(video);
 
   const footer=document.createElement('div');footer.className='tile-footer';
-  footer.innerHTML=`<div class="footer-status"><div class="footer-dot" style="background:var(--amber)"></div><span class="footer-label" data-status="">connecting</span></div><span class="footer-url">${escHtml(stream.url)}</span>`;
+  footer.innerHTML=`<div class="footer-status"><div class="footer-dot" style="background:var(--amber)"></div><span class="footer-label" data-status="">connecting</span></div><span class="footer-url">${escHtml(stream.webrtc_url||stream.url)}</span>`;
 
   tile.appendChild(fig);tile.appendChild(header);tile.appendChild(body);tile.appendChild(footer);
-  attachStreamHandlers(img,overlay,footer,stream.url);
+  attachStreamHandlers(video,overlay,footer,stream);
   attachTileHandlers(tile,header,stream.id);
-  img.src=stream.url;
   return tile;
 }
 
-function attachStreamHandlers(img,overlay,footer,url){
-  let retryDelay=2000,retryTimer=null,countdown=null;
+function attachStreamHandlers(el,overlay,footer,stream){
+  let retryDelay=2000,retryTimer=null,countdown=null,webrtcHandle=null;
   const dot=footer.querySelector('.footer-dot'),lbl=footer.querySelector('[data-status]');
   function setStatus(mode,secs){
     if(mode==='live'){
@@ -216,13 +312,48 @@ function attachStreamHandlers(img,overlay,footer,url){
       dot.style.background='#a83020';lbl.textContent=secs>0?`retry ${secs}s`:'reconnecting';
     }
   }
-  img.onload=()=>{clearTimeout(retryTimer);clearInterval(countdown);retryDelay=2000;setStatus('live');};
-  img.onerror=()=>{
-    clearTimeout(retryTimer);clearInterval(countdown);
-    let secs=Math.round(retryDelay/1000);setStatus('error',secs);
-    countdown=setInterval(()=>{secs--;const t=overlay.querySelector('.status-text');if(t)t.textContent=secs>0?`Retry in ${secs}s`:'Reconnecting';if(lbl)lbl.textContent=secs>0?`retry ${secs}s`:'reconnecting';},1000);
-    retryTimer=setTimeout(()=>{clearInterval(countdown);setStatus('connecting');const sep=url.includes('?')?'&':'?';img.src=url+sep+'_t='+Date.now();retryDelay=Math.min(retryDelay*2,30000);},retryDelay);
-  };
+
+  // Try WebRTC first, fall back to MJPEG <img>
+  if(stream.webrtc_url && stream.peer_id && el.tagName==='VIDEO'){
+    setStatus('connecting');
+    let webrtcTimeout=setTimeout(()=>{
+      console.warn('WebRTC timeout, falling back to MJPEG');
+      if(webrtcHandle)webrtcHandle.close();
+      fallbackToMjpeg();
+    },10000);
+
+    webrtcHandle=connectWebRTC(el,stream.webrtc_url,stream.peer_id,{
+      onConnected:()=>{clearTimeout(webrtcTimeout);retryDelay=2000;setStatus('live');},
+      onDisconnected:()=>{
+        clearTimeout(webrtcTimeout);
+        let secs=Math.round(retryDelay/1000);setStatus('error',secs);
+        countdown=setInterval(()=>{secs--;const t=overlay.querySelector('.status-text');if(t)t.textContent=secs>0?`Retry in ${secs}s`:'Reconnecting';if(lbl)lbl.textContent=secs>0?`retry ${secs}s`:'reconnecting';},1000);
+        retryTimer=setTimeout(()=>{clearInterval(countdown);setStatus('connecting');if(webrtcHandle)webrtcHandle.close();webrtcHandle=connectWebRTC(el,stream.webrtc_url,stream.peer_id,arguments[0]);retryDelay=Math.min(retryDelay*2,30000);},retryDelay);
+      },
+      onError:(err)=>{
+        clearTimeout(webrtcTimeout);
+        console.warn('WebRTC failed, falling back to MJPEG:',err);
+        fallbackToMjpeg();
+      }
+    });
+  } else {
+    fallbackToMjpeg();
+  }
+
+  function fallbackToMjpeg(){
+    // Replace <video> with <img> for MJPEG fallback
+    const img=document.createElement('img');img.alt=el.alt||'';img.loading='eager';
+    el.replaceWith(img);
+    const url=stream.url;
+    img.onload=()=>{clearTimeout(retryTimer);clearInterval(countdown);retryDelay=2000;setStatus('live');};
+    img.onerror=()=>{
+      clearTimeout(retryTimer);clearInterval(countdown);
+      let secs=Math.round(retryDelay/1000);setStatus('error',secs);
+      countdown=setInterval(()=>{secs--;const t=overlay.querySelector('.status-text');if(t)t.textContent=secs>0?`Retry in ${secs}s`:'Reconnecting';if(lbl)lbl.textContent=secs>0?`retry ${secs}s`:'reconnecting';},1000);
+      retryTimer=setTimeout(()=>{clearInterval(countdown);setStatus('connecting');const sep=url.includes('?')?'&':'?';img.src=url+sep+'_t='+Date.now();retryDelay=Math.min(retryDelay*2,30000);},retryDelay);
+    };
+    img.src=url;
+  }
 }
 
 function attachTileHandlers(tile,header,streamId){
@@ -240,7 +371,7 @@ function attachTileHandlers(tile,header,streamId){
   });
   tile.querySelector('.tile-body').addEventListener('dblclick',()=>{
     const s=state.streams.find(s=>s.id===streamId);
-    if(s)window.open('robot.html?label='+encodeURIComponent(s.label)+'&url='+encodeURIComponent(s.url)+'&robot_id='+encodeURIComponent(s.robot_id||'reachy-001'),'_blank');
+    if(s){let u='robot.html?label='+encodeURIComponent(s.label)+'&url='+encodeURIComponent(s.url)+'&robot_id='+encodeURIComponent(s.robot_id||'reachy-001');if(s.webrtc_url)u+='&webrtc_url='+encodeURIComponent(s.webrtc_url);if(s.peer_id)u+='&peer_id='+encodeURIComponent(s.peer_id);window.open(u,'_blank');}
   });
 }
 

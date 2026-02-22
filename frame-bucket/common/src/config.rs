@@ -39,6 +39,10 @@ pub struct StreamConfig {
     pub fps: f64,
     #[serde(default = "default_mode")]
     pub mode: String,
+    /// TCP address for H.264 MPEG-TS stream (e.g., "100.107.96.29:9001").
+    /// Required when mode = "h264".
+    #[serde(default)]
+    pub h264_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -51,6 +55,10 @@ pub struct FilterConfig {
     pub phash_hash_size: u32,
     #[serde(default = "default_histogram_threshold")]
     pub histogram_threshold: f64,
+    /// Frame-size spike ratio for H.264 P-frame activity detection.
+    /// A P-frame is "active" if its size > spike_ratio * EMA(p_frame_sizes).
+    #[serde(default = "default_spike_ratio")]
+    pub spike_ratio: f64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -74,6 +82,17 @@ pub struct EvictionConfig {
     pub target_gb: f64,
     #[serde(default = "default_batch_size")]
     pub batch_size: usize,
+    /// How many consecutive S3 upload failures before switching to delete-only mode.
+    #[serde(default = "default_fallback_after_failures")]
+    pub fallback_after_failures: u32,
+    /// Seconds to wait in fallback mode before retrying S3.
+    #[serde(default = "default_fallback_retry_secs")]
+    pub fallback_retry_secs: u64,
+    /// In fallback mode, only delete locally when storage exceeds this (GB).
+    /// Should be higher than threshold_gb to keep data locally as long as possible.
+    /// Defaults to 0, meaning "use threshold_gb" (same as normal eviction).
+    #[serde(default)]
+    pub fallback_threshold_gb: f64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -150,6 +169,9 @@ fn default_phash_hash_size() -> u32 {
 fn default_histogram_threshold() -> f64 {
     0.15
 }
+fn default_spike_ratio() -> f64 {
+    4.0
+}
 fn default_rustfs_bucket() -> String {
     "camera-frames".into()
 }
@@ -167,6 +189,12 @@ fn default_target_gb() -> f64 {
 }
 fn default_batch_size() -> usize {
     50
+}
+fn default_fallback_after_failures() -> u32 {
+    10
+}
+fn default_fallback_retry_secs() -> u64 {
+    600
 }
 fn default_aws_prefix() -> String {
     "archive/".into()

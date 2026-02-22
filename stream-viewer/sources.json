@@ -1,8 +1,11 @@
 {
+  "api_url": "http://100.81.222.59:8080",
   "streams": [
     {
       "label": "Reachy Mini Bedroom",
       "url": "http://100.107.96.29:8000/api/camera/stream",
+      "webrtc_url": "ws://100.107.96.29:8443",
+      "peer_id": "reachymini",
       "robot_id": "reachy-001"
     }
   ]

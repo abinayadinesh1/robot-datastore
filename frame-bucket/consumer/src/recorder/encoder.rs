@@ -99,6 +99,50 @@ impl SegmentEncoder {
         })
     }
 
+    /// Spawn an ffmpeg subprocess in passthrough mode for raw H.264 data.
+    /// No re-encoding — uses `-c:v copy` to mux H.264 access units into MP4.
+    pub async fn start_passthrough(start_ms: i64, fps: f64) -> Result<Self, EncoderError> {
+        let output_path = std::env::temp_dir().join(format!("segment_{start_ms}.mp4"));
+        let fps_str = fps.to_string();
+
+        let mut cmd = Command::new("ffmpeg");
+        cmd.args([
+            "-f", "h264",
+            "-r", &fps_str,
+            "-i", "pipe:0",
+            "-c:v", "copy",
+            "-movflags", "+faststart",
+            "-y",
+            output_path.to_str().unwrap(),
+        ])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped());
+
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| EncoderError::Spawn(e.to_string()))?;
+
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| EncoderError::Spawn("could not get stdin handle".into()))?;
+
+        debug!(
+            fps,
+            output = output_path.display().to_string(),
+            "ffmpeg H.264 passthrough started"
+        );
+
+        Ok(Self {
+            child,
+            stdin,
+            output_path,
+            frame_count: 0,
+            start_ms,
+        })
+    }
+
     /// Write a single JPEG frame to ffmpeg's stdin pipe.
     pub async fn push_frame(&mut self, jpeg_data: &[u8]) -> Result<(), EncoderError> {
         self.stdin
@@ -107,6 +151,17 @@ impl SegmentEncoder {
             .map_err(|e| EncoderError::Write(e.to_string()))?;
         self.frame_count += 1;
         debug!(frame_count = self.frame_count, "pushed frame to encoder");
+        Ok(())
+    }
+
+    /// Write a raw H.264 access unit (Annex B) to ffmpeg's stdin pipe.
+    pub async fn push_h264(&mut self, h264_data: &[u8]) -> Result<(), EncoderError> {
+        self.stdin
+            .write_all(h264_data)
+            .await
+            .map_err(|e| EncoderError::Write(e.to_string()))?;
+        self.frame_count += 1;
+        debug!(frame_count = self.frame_count, "pushed H.264 AU to encoder");
         Ok(())
     }
 

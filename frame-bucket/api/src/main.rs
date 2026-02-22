@@ -27,6 +27,7 @@ struct AppState {
     rustfs_bucket: String,
     s3_client: aws_sdk_s3::Client,
     labelled_data_bucket: String,
+    health_file_path: PathBuf,
 }
 
 // ---------------------------------------------------------------------------
@@ -956,6 +957,81 @@ async fn ensure_bucket(client: &aws_sdk_s3::Client, bucket: &str) {
 }
 
 // ---------------------------------------------------------------------------
+// Health
+// ---------------------------------------------------------------------------
+
+/// GET /health — returns the consumer's health state JSON, enriched with host disk stats.
+async fn get_health(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let path = state.health_file_path.clone();
+    match tokio::task::spawn_blocking(move || {
+        let contents = std::fs::read_to_string(&path)?;
+        let mut json: serde_json::Value = serde_json::from_str(&contents)
+            .unwrap_or(serde_json::Value::Null);
+
+        // Enrich with host disk usage (the filesystem where data/ lives).
+        if let Some(disk) = get_disk_usage(&path) {
+            json["disk"] = disk;
+        }
+
+        Ok::<serde_json::Value, std::io::Error>(json)
+    })
+    .await
+    {
+        Ok(Ok(json)) => (StatusCode::OK, Json(json)).into_response(),
+        Ok(Err(_)) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "error": "health data not available",
+                "detail": "consumer has not written health state yet"
+            })),
+        )
+            .into_response(),
+        Err(e) => {
+            error!(error = %e, "failed to read health file");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+/// Get disk usage for the filesystem containing the given path using statvfs.
+fn get_disk_usage(path: &std::path::Path) -> Option<serde_json::Value> {
+    use std::ffi::CString;
+    let c_path = CString::new(path.to_str()?).ok()?;
+    unsafe {
+        let mut stat: libc::statvfs = std::mem::zeroed();
+        if libc::statvfs(c_path.as_ptr(), &mut stat) != 0 {
+            return None;
+        }
+        let block_size = stat.f_frsize as u64;
+        let total_bytes = stat.f_blocks as u64 * block_size;
+        let free_bytes = stat.f_bavail as u64 * block_size;
+        let used_bytes = total_bytes - (stat.f_bfree as u64 * block_size);
+        let total_gb = total_bytes as f64 / 1_073_741_824.0;
+        let used_gb = used_bytes as f64 / 1_073_741_824.0;
+        let free_gb = free_bytes as f64 / 1_073_741_824.0;
+        let usage_pct = if total_bytes > 0 {
+            (used_bytes as f64 / total_bytes as f64) * 100.0
+        } else {
+            0.0
+        };
+        let status = if usage_pct > 95.0 {
+            "critical"
+        } else if usage_pct > 85.0 {
+            "pressure"
+        } else {
+            "healthy"
+        };
+        Some(serde_json::json!({
+            "total_gb": (total_gb * 10.0).round() / 10.0,
+            "used_gb": (used_gb * 10.0).round() / 10.0,
+            "free_gb": (free_gb * 10.0).round() / 10.0,
+            "usage_pct": (usage_pct * 10.0).round() / 10.0,
+            "status": status
+        }))
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -1009,6 +1085,7 @@ async fn main() {
         rustfs_bucket: config.api.rustfs_bucket.clone(),
         s3_client,
         labelled_data_bucket: config.api.labelled_data_bucket.clone(),
+        health_file_path: PathBuf::from(&config.database.path).join("storage_stats.json"),
     });
 
     let cors = CorsLayer::new()
@@ -1032,6 +1109,8 @@ async fn main() {
         .route("/robots/:robot_id/collections/:collection_id/clips/:clip_id", delete(delete_clip))
         // Download info
         .route("/robots/:robot_id/collections/:collection_id/download-info", get(download_info))
+        // Health
+        .route("/health", get(get_health))
         .layer(cors)
         .with_state(state);
 

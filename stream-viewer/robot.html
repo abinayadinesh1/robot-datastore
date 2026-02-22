@@ -6,6 +6,7 @@
 <title>Robot Stream</title>
 <link href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,500;0,700;0,800;1,400;1,500&family=IBM+Plex+Mono:wght@300;400;500;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css">
+<script src="webrtc.js"></script>
 </head>
 <body class="page-robot">
 
@@ -62,7 +63,7 @@
         </div>
         <span class="status-text" id="overlay-text">Acquiring</span>
       </div>
-      <img id="stream-img" loading="eager" decoding="async" alt="">
+      <video id="stream-video" autoplay playsinline muted style="width:100%;height:100%;object-fit:contain;display:block;"></video>
     </div>
     <div class="stream-url-bar" id="url-bar"></div>
     <div class="fig-label" id="fig-label"></div>
@@ -159,18 +160,19 @@ function getParam(name){
   return new URLSearchParams(window.location.search).get(name)||'';
 }
 
-const label   = getParam('label') || 'Robot Camera';
-const url     = getParam('url');
-const robotId = getParam('robot_id') || 'reachy-001';
-const apiBase = 'http://100.81.222.59:8080';
+const label     = getParam('label') || 'Robot Camera';
+const url       = getParam('url');
+const webrtcUrl = getParam('webrtc_url');
+const peerId    = getParam('peer_id') || 'reachymini';
+const robotId   = getParam('robot_id') || 'reachy-001';
+const apiBase   = 'http://100.81.222.59:8080';
 
 // ── Populate UI labels ───────────────────────────────────────────────────
 document.title = label + ' — Stream Viewer';
 document.getElementById('header-label').textContent = label;
 document.getElementById('main-label').textContent   = label;
-document.getElementById('url-bar').textContent      = url;
+document.getElementById('url-bar').textContent      = webrtcUrl || url;
 document.getElementById('fig-sub').textContent      = 'live feed';
-document.getElementById('stream-img').alt           = label;
 const idx = Math.floor(Math.random()*999)+1;
 document.getElementById('fig-label').textContent = `FIG.${String(idx).padStart(3,'0')} — ${label.toUpperCase()}`;
 
@@ -256,13 +258,13 @@ function switchMode(mode) {
   }
 }
 
-// ── Live feed (original logic, unchanged) ────────────────────────────────
-if(!url){
+// ── Live feed (WebRTC with MJPEG fallback) ───────────────────────────────
+if(!url && !webrtcUrl){
   document.getElementById('overlay-text').textContent = 'No URL provided';
   document.getElementById('status-dot').style.background='#a83020';
   document.getElementById('status-text').textContent='error';
 } else {
-  const img     = document.getElementById('stream-img');
+  const videoEl = document.getElementById('stream-video');
   const overlay = document.getElementById('status-overlay');
   const dot     = document.getElementById('status-dot');
   const stText  = document.getElementById('status-text');
@@ -287,28 +289,37 @@ if(!url){
     dot.style.background='#a83020'; stText.textContent=secs>0?`retry ${secs}s`:'reconnecting';
   }
 
-  img.onload=()=>{
-    clearTimeout(retryTimer); clearInterval(countdown);
-    retryDelay=2000; setLive();
-  };
-  img.onerror=()=>{
-    clearTimeout(retryTimer); clearInterval(countdown);
-    let secs=Math.round(retryDelay/1000); setError(secs);
-    countdown=setInterval(()=>{
-      secs--;
-      ovText.textContent=secs>0?`Retry in ${secs}s`:'Reconnecting';
-      stText.textContent=secs>0?`retry ${secs}s`:'reconnecting';
-    },1000);
-    retryTimer=setTimeout(()=>{
-      clearInterval(countdown);
-      setConnecting();
-      const sep=url.includes('?')?'&':'?';
-      img.src=url+sep+'_t='+Date.now();
-      retryDelay=Math.min(retryDelay*2,30000);
-    },retryDelay);
-  };
+  function startMjpegFallback(){
+    // Replace <video> with <img> for MJPEG
+    const img=document.createElement('img');
+    img.style.cssText='width:100%;height:100%;object-fit:contain;display:block;';
+    img.alt=label;img.loading='eager';
+    videoEl.replaceWith(img);
+    img.onload=()=>{clearTimeout(retryTimer);clearInterval(countdown);retryDelay=2000;setLive();};
+    img.onerror=()=>{
+      clearTimeout(retryTimer);clearInterval(countdown);
+      let secs=Math.round(retryDelay/1000);setError(secs);
+      countdown=setInterval(()=>{secs--;ovText.textContent=secs>0?`Retry in ${secs}s`:'Reconnecting';stText.textContent=secs>0?`retry ${secs}s`:'reconnecting';},1000);
+      retryTimer=setTimeout(()=>{clearInterval(countdown);setConnecting();const sep=url.includes('?')?'&':'?';img.src=url+sep+'_t='+Date.now();retryDelay=Math.min(retryDelay*2,30000);},retryDelay);
+    };
+    img.src=url;
+  }
 
-  img.src=url;
+  if(webrtcUrl){
+    setConnecting();
+    let webrtcTimeout=setTimeout(()=>{
+      console.warn('WebRTC timeout, falling back to MJPEG');
+      if(url) startMjpegFallback();
+    },10000);
+
+    connectWebRTC(videoEl,webrtcUrl,peerId,{
+      onConnected:()=>{clearTimeout(webrtcTimeout);retryDelay=2000;setLive();},
+      onDisconnected:()=>{clearTimeout(webrtcTimeout);if(url)startMjpegFallback();},
+      onError:(err)=>{clearTimeout(webrtcTimeout);console.warn('WebRTC error:',err);if(url)startMjpegFallback();}
+    });
+  } else {
+    startMjpegFallback();
+  }
 }
 
 // ── Timeline / segment loading ───────────────────────────────────────────
