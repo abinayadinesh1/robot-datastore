@@ -95,7 +95,8 @@ function connectWebRTC(videoEl, signalingUrl, peerId, callbacks) {
         };
 
         pc.onconnectionstatechange = () => {
-          if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+          // 'disconnected' is transient — ICE may self-heal. Only treat 'failed' as terminal.
+          if (pc.connectionState === 'failed') {
             if (callbacks.onDisconnected) callbacks.onDisconnected();
           }
         };
