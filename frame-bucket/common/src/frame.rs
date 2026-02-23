@@ -13,9 +13,9 @@ pub enum FramePayload {
 
 /// A camera frame with timestamp metadata.
 ///
-/// Binary wire formats (for Kafka messages):
+/// Binary wire formats:
 ///
-/// v1 (JPEG, backward-compatible):
+/// v1 (JPEG):
 ///   [0..8]   captured_at_ms  (i64 big-endian, Unix millis)
 ///   [8..16]  seq             (u64 big-endian, sequence number)
 ///   [16..]   jpeg_data       (raw JPEG bytes)
@@ -101,7 +101,7 @@ impl TimestampedFrame {
 
     // -- Serialization ----------------------------------------------------------
 
-    /// Serialize to binary format for Kafka payload.
+    /// Serialize to binary format.
     pub fn serialize(&self) -> Vec<u8> {
         match &self.payload {
             FramePayload::Jpeg(jpeg_data) => {
@@ -126,7 +126,7 @@ impl TimestampedFrame {
         }
     }
 
-    /// Deserialize from binary Kafka payload. Auto-detects v1 (JPEG) vs v2 (H.264).
+    /// Deserialize from binary format. Auto-detects v1 (JPEG) vs v2 (H.264).
     pub fn deserialize(data: &[u8]) -> Result<Self, FrameError> {
         if data.is_empty() {
             return Err(FrameError::TooShort {

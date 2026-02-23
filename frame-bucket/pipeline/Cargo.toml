@@ -1,12 +1,12 @@
 [package]
-name = "frame-bucket-consumer"
+name = "frame-bucket-pipeline"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
 frame-bucket-common = { path = "../common" }
 tokio = { version = "1", features = ["full"] }
-rdkafka = { version = "0.36", features = ["tokio", "cmake-build"] }
+reqwest = { version = "0.12", features = ["stream", "rustls-tls"], default-features = false }
 aws-sdk-s3 = "1"
 aws-config = { version = "1", features = ["behavior-version-latest"] }
 aws-credential-types = "1"

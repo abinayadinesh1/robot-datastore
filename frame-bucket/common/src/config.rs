@@ -3,8 +3,7 @@ use std::path::Path;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
-    pub kafka: KafkaConfig,
-    pub stream: StreamConfig,
+    pub robots: Vec<RobotConfig>,
     pub filter: FilterConfig,
     pub rustfs: RustfsConfig,
     pub eviction: EvictionConfig,
@@ -20,29 +19,19 @@ pub struct Config {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct KafkaConfig {
-    pub brokers: String,
-    #[serde(default = "default_topic")]
-    pub topic: String,
-    #[serde(default = "default_group_id")]
-    pub group_id: String,
-    #[serde(default = "default_compression")]
-    pub compression: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct StreamConfig {
-    pub url: String,
-    #[serde(default = "default_quality")]
-    pub quality: u32,
-    #[serde(default = "default_fps")]
-    pub fps: f64,
+pub struct RobotConfig {
+    pub robot_id: String,
+    pub stream_url: String,
     #[serde(default = "default_mode")]
     pub mode: String,
     /// TCP address for H.264 MPEG-TS stream (e.g., "100.107.96.29:9001").
     /// Required when mode = "h264".
     #[serde(default)]
     pub h264_url: Option<String>,
+    #[serde(default = "default_quality")]
+    pub quality: u32,
+    #[serde(default = "default_fps")]
+    pub fps: f64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -100,8 +89,6 @@ pub struct AwsS3Config {
     pub bucket: String,
     #[serde(default = "default_aws_prefix")]
     pub prefix: String,
-    #[serde(default = "default_robot_id")]
-    pub robot_id: String,
     #[serde(default = "default_region")]
     pub region: String,
 }
@@ -139,15 +126,6 @@ pub enum ConfigError {
 }
 
 // Default value functions
-fn default_topic() -> String {
-    "camera.frames".into()
-}
-fn default_group_id() -> String {
-    "frame-filter-group".into()
-}
-fn default_compression() -> String {
-    "snappy".into()
-}
 fn default_quality() -> u32 {
     80
 }
@@ -198,9 +176,6 @@ fn default_fallback_retry_secs() -> u64 {
 }
 fn default_aws_prefix() -> String {
     "archive/".into()
-}
-fn default_robot_id() -> String {
-    "reachy-001".into()
 }
 fn default_region() -> String {
     "us-west-2".into()
