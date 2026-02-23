@@ -3,6 +3,7 @@ use std::path::Path;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
+    #[serde(default)]
     pub robots: Vec<RobotConfig>,
     pub filter: FilterConfig,
     pub rustfs: RustfsConfig,
