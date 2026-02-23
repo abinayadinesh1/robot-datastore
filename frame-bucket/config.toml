@@ -5,6 +5,9 @@ mode = "h264"
 h264_url = "100.107.96.29:9001"
 fps = 30.0
 quality = 80
+label = "Reachy Mini Bedroom"
+webrtc_url = "ws://100.107.96.29:8443"
+peer_id = "reachymini"
 
 [filter]
 primary = "framesize"       # "phash", "histogram", or "framesize" (for H.264)
@@ -40,6 +43,7 @@ path = "data/"   # directory where {robot_id}.db SQLite files are created
 
 [api]
 port = 8080
+mgmt_port = 8081                                   # pipeline management API (POST/DELETE /streams)
 rustfs_public_url = "http://100.81.222.59:9000"   # URL clients use to reach RustFS
 rustfs_bucket = "camera-frames"
 labelled_data_bucket = "labelled-data"             # bucket for saved clip manifests

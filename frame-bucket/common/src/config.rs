@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -18,7 +18,7 @@ pub struct Config {
     pub api: ApiConfig,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct RobotConfig {
     pub robot_id: String,
     pub stream_url: String,
@@ -26,12 +26,19 @@ pub struct RobotConfig {
     pub mode: String,
     /// TCP address for H.264 MPEG-TS stream (e.g., "100.107.96.29:9001").
     /// Required when mode = "h264".
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub h264_url: Option<String>,
     #[serde(default = "default_quality")]
     pub quality: u32,
     #[serde(default = "default_fps")]
     pub fps: f64,
+    // Viewer fields (optional, used by stream-viewer)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub webrtc_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub peer_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -121,8 +128,82 @@ impl Config {
 pub enum ConfigError {
     #[error("failed to read config file {0}: {1}")]
     ReadFile(String, std::io::Error),
+    #[error("failed to write config file {0}: {1}")]
+    WriteFile(String, std::io::Error),
     #[error("failed to parse config: {0}")]
     Parse(String),
+}
+
+/// Append a new `[[robots]]` entry to the config file, preserving existing
+/// comments and formatting via `toml_edit`.
+pub fn append_robot_to_config(path: &Path, robot: &RobotConfig) -> Result<(), ConfigError> {
+    use toml_edit::{value, ArrayOfTables, DocumentMut, Item, Table};
+
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| ConfigError::ReadFile(path.display().to_string(), e))?;
+    let mut doc: DocumentMut = content
+        .parse()
+        .map_err(|e: toml_edit::TomlError| ConfigError::Parse(e.to_string()))?;
+
+    let mut table = Table::new();
+    table["robot_id"] = value(&robot.robot_id);
+    table["stream_url"] = value(&robot.stream_url);
+    table["mode"] = value(&robot.mode);
+    if let Some(ref h264) = robot.h264_url {
+        table["h264_url"] = value(h264);
+    }
+    table["fps"] = value(robot.fps);
+    table["quality"] = value(robot.quality as i64);
+    if let Some(ref label) = robot.label {
+        table["label"] = value(label);
+    }
+    if let Some(ref webrtc) = robot.webrtc_url {
+        table["webrtc_url"] = value(webrtc);
+    }
+    if let Some(ref peer) = robot.peer_id {
+        table["peer_id"] = value(peer);
+    }
+
+    let robots = doc
+        .entry("robots")
+        .or_insert_with(|| Item::ArrayOfTables(ArrayOfTables::new()));
+    if let Item::ArrayOfTables(arr) = robots {
+        arr.push(table);
+    }
+
+    std::fs::write(path, doc.to_string())
+        .map_err(|e| ConfigError::WriteFile(path.display().to_string(), e))?;
+    Ok(())
+}
+
+/// Remove the `[[robots]]` entry with the given `robot_id` from the config file.
+/// Returns `true` if an entry was removed.
+pub fn remove_robot_from_config(path: &Path, robot_id: &str) -> Result<bool, ConfigError> {
+    use toml_edit::{DocumentMut, Item};
+
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| ConfigError::ReadFile(path.display().to_string(), e))?;
+    let mut doc: DocumentMut = content
+        .parse()
+        .map_err(|e: toml_edit::TomlError| ConfigError::Parse(e.to_string()))?;
+
+    let removed = if let Some(Item::ArrayOfTables(arr)) = doc.get_mut("robots") {
+        let before = arr.len();
+        arr.retain(|t| {
+            t.get("robot_id")
+                .and_then(|v| v.as_str())
+                .map_or(true, |id| id != robot_id)
+        });
+        arr.len() < before
+    } else {
+        false
+    };
+
+    if removed {
+        std::fs::write(path, doc.to_string())
+            .map_err(|e| ConfigError::WriteFile(path.display().to_string(), e))?;
+    }
+    Ok(removed)
 }
 
 // Default value functions
@@ -226,6 +307,9 @@ fn default_db_path() -> String {
 fn default_api_port() -> u16 {
     8080
 }
+fn default_mgmt_port() -> u16 {
+    8081
+}
 fn default_rustfs_public_url() -> String {
     "http://localhost:9000".into()
 }
@@ -246,6 +330,8 @@ impl Default for DatabaseConfig {
 pub struct ApiConfig {
     #[serde(default = "default_api_port")]
     pub port: u16,
+    #[serde(default = "default_mgmt_port")]
+    pub mgmt_port: u16,
     #[serde(default = "default_rustfs_public_url")]
     pub rustfs_public_url: String,
     #[serde(default = "default_rustfs_bucket")]
@@ -262,6 +348,7 @@ impl Default for ApiConfig {
     fn default() -> Self {
         Self {
             port: default_api_port(),
+            mgmt_port: default_mgmt_port(),
             rustfs_public_url: default_rustfs_public_url(),
             rustfs_bucket: default_rustfs_bucket(),
             labelled_data_bucket: default_labelled_data_bucket(),

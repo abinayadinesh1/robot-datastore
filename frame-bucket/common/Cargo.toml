@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
+toml_edit = "0.22"
 chrono = "0.4"
 thiserror = "2"
 tracing = "0.1"

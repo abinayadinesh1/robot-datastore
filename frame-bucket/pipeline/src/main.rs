@@ -8,10 +8,14 @@ mod storage;
 use frame_bucket_common::config::{Config, RobotConfig};
 use frame_bucket_common::frame::TimestampedFrame;
 use recorder::RecordingStateMachine;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::task::JoinHandle;
 use tracing::{debug, error, info, warn};
+
+mod mgmt;
 
 #[tokio::main]
 async fn main() {
@@ -36,8 +40,7 @@ async fn main() {
         .init();
 
     if config.robots.is_empty() {
-        error!("no [[robots]] entries in config, nothing to do");
-        std::process::exit(1);
+        warn!("no [[robots]] entries in config; pipeline will wait for robots to be added");
     }
 
     info!(
@@ -69,28 +72,92 @@ async fn main() {
             .await;
     });
 
-    // Spawn one pipeline per robot
-    let mut tasks = Vec::new();
-    for robot in &config.robots {
-        let rustfs = Arc::clone(&rustfs_storage);
-        let robot = robot.clone();
-        let filter_config = config.filter.clone();
-        let recording_config = config.recording.clone();
-        let db_path = config.database.path.clone();
-        let rustfs_prefix = config.rustfs.prefix.clone();
+    // Channel for the management API to send commands to the main loop
+    let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::channel::<mgmt::Command>(16);
 
-        tasks.push(tokio::spawn(async move {
-            run_robot_pipeline(robot, rustfs, filter_config, recording_config, db_path, rustfs_prefix).await;
-        }));
+    // Start management HTTP server
+    let mgmt_port = config.api.mgmt_port;
+    tokio::spawn(mgmt::serve(mgmt_port, config_path.clone(), cmd_tx));
+
+    // Track running robot pipelines by robot_id
+    let mut running: HashMap<String, JoinHandle<()>> = HashMap::new();
+
+    // Spawn initial robots
+    for robot in &config.robots {
+        let handle = spawn_robot_task(
+            robot.clone(),
+            Arc::clone(&rustfs_storage),
+            config.filter.clone(),
+            config.recording.clone(),
+            config.database.path.clone(),
+            config.rustfs.prefix.clone(),
+        );
+        running.insert(robot.robot_id.clone(), handle);
     }
 
     info!(
-        robots = ?config.robots.iter().map(|r| &r.robot_id).collect::<Vec<_>>(),
-        "all robot pipelines started"
+        robots = ?running.keys().collect::<Vec<_>>(),
+        "initial robot pipelines started"
     );
 
-    // Wait for all pipelines (they run forever unless a stream permanently fails)
-    futures_util::future::join_all(tasks).await;
+    // Event loop: react to management commands
+    while let Some(cmd) = cmd_rx.recv().await {
+        // Clean up any finished tasks first
+        running.retain(|id, handle| {
+            if handle.is_finished() {
+                warn!(robot_id = %id, "robot pipeline has exited, removing from tracking");
+                false
+            } else {
+                true
+            }
+        });
+
+        match cmd {
+            mgmt::Command::AddRobot(robot, reply) => {
+                if running.contains_key(&robot.robot_id) {
+                    let _ = reply.send(Err(format!(
+                        "robot '{}' is already running",
+                        robot.robot_id
+                    )));
+                } else {
+                    info!(robot_id = robot.robot_id, "spawning new robot pipeline");
+                    let handle = spawn_robot_task(
+                        robot.clone(),
+                        Arc::clone(&rustfs_storage),
+                        config.filter.clone(),
+                        config.recording.clone(),
+                        config.database.path.clone(),
+                        config.rustfs.prefix.clone(),
+                    );
+                    running.insert(robot.robot_id.clone(), handle);
+                    let _ = reply.send(Ok(()));
+                }
+            }
+            mgmt::Command::RemoveRobot(robot_id, reply) => {
+                if let Some(handle) = running.remove(&robot_id) {
+                    info!(robot_id, "aborting robot pipeline");
+                    handle.abort();
+                    let _ = reply.send(Ok(()));
+                } else {
+                    let _ = reply.send(Err(format!("robot '{}' is not running", robot_id)));
+                }
+            }
+        }
+    }
+}
+
+fn spawn_robot_task(
+    robot: RobotConfig,
+    rustfs: Arc<storage::RustfsStorage>,
+    filter_config: frame_bucket_common::config::FilterConfig,
+    recording_config: frame_bucket_common::config::RecordingConfig,
+    db_path: String,
+    rustfs_prefix: String,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        run_robot_pipeline(robot, rustfs, filter_config, recording_config, db_path, rustfs_prefix)
+            .await;
+    })
 }
 
 async fn run_robot_pipeline(

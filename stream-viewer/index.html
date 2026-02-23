@@ -81,12 +81,22 @@
     <div class="health-usage" id="health-usage">-- / -- GB</div>
     <div class="health-sep"></div>
     <div class="health-item">
+      <div class="health-dot" id="health-streams-dot"></div>
+      <div class="health-detail">
+        <span class="health-label">Streams</span>
+        <span class="health-sub" id="health-streams-text">--</span>
+      </div>
+    </div>
+    <div class="health-sep"></div>
+    <div class="health-item">
       <div class="health-dot" id="health-disk-dot"></div>
       <div class="health-detail">
         <span class="health-label">Disk</span>
         <span class="health-sub" id="health-disk-text">--</span>
       </div>
     </div>
+    <div class="health-sep"></div>
+    <a href="health.html" class="health-metrics-btn" title="Health Metrics">details &#x2192;</a>
   </div>
   <div class="info-right" id="sys-label"></div>
 </div>
@@ -176,11 +186,30 @@ function save(){localStorage.setItem(STORAGE_KEY,JSON.stringify(state.streams));
 async function loadInitial(){
   const saved=localStorage.getItem(STORAGE_KEY);
   if(saved){try{state.streams=JSON.parse(saved);state.nextId=parseInt(localStorage.getItem(NEXT_ID_KEY)||'1',10);}catch(_){}}
+
+  // Bootstrap: get api_url and mgmt_url from sources.json
+  let apiBase=HEALTH_API;
+  let mgmtBase='http://100.81.222.59:8081';
   try{
     const res=await fetch('sources.json');const data=await res.json();
-    if(data.api_url) initHealthPolling(data.api_url);
-    if(!saved && Array.isArray(data.streams)){data.streams.forEach(s=>{const o={id:state.nextId++,label:s.label||'Camera',robot_id:s.robot_id||'reachy-001'};if(s.url)o.url=s.url;if(s.webrtc_url)o.webrtc_url=s.webrtc_url;if(s.peer_id)o.peer_id=s.peer_id;state.streams.push(o);});save();}
-  }catch(_){ initHealthPolling(); }
+    if(data.api_url) apiBase=data.api_url;
+    if(data.mgmt_url) mgmtBase=data.mgmt_url;
+  }catch(_){}
+  initHealthPolling(apiBase);
+
+  // Fetch streams from pipeline management API
+  if(!saved){
+    try{
+      const res=await fetch(mgmtBase+'/streams');const data=await res.json();
+      if(Array.isArray(data.streams)){data.streams.forEach(s=>{
+        const o={id:state.nextId++,label:s.label||s.robot_id||'Camera',robot_id:s.robot_id||'unknown'};
+        if(s.stream_url)o.url=s.stream_url;
+        if(s.webrtc_url)o.webrtc_url=s.webrtc_url;
+        if(s.peer_id)o.peer_id=s.peer_id;
+        state.streams.push(o);
+      });save();}
+    }catch(e){console.warn('Failed to fetch streams from API',e);}
+  }
   if(state.streams.length===0){state.streams.push({id:state.nextId++,label:'Front Camera',url:DEFAULT_URL});save();}
 }
 
@@ -189,29 +218,55 @@ let HEALTH_API='http://100.81.222.59:8080';
 function initHealthPolling(apiUrl){
   HEALTH_API=apiUrl||HEALTH_API;
   fetchHealth();
+  fetchStreamsHealth();
   setInterval(fetchHealth,15000);
+  setInterval(fetchStreamsHealth,30000);
 }
 async function fetchHealth(){
   const panel=$('health-panel');
+  panel.style.display='flex';
   try{
     const res=await fetch(HEALTH_API+'/health',{signal:AbortSignal.timeout(5000)});
     if(!res.ok)throw new Error('HTTP '+res.status);
     const h=await res.json();
-    panel.style.display='flex';
     updateHealthPanel(h);
   }catch(e){
-    panel.style.display='flex';
+    // /health endpoint unreachable — try direct RustFS browse as fallback
     setHealthDot('health-rustfs-dot','');
+    $('health-rustfs-text').textContent='API offline';
     setHealthDot('health-s3-dot','');
-    $('health-rustfs-text').textContent='no data';
-    $('health-s3-text').textContent='no data';
-    $('health-usage').textContent='API unreachable';
+    $('health-s3-text').textContent='API offline';
+    $('health-usage').textContent='--';
     setHealthDot('health-disk-dot','');
-    $('health-disk-text').textContent='no data';
+    $('health-disk-text').textContent='--';
+    // Try the browse endpoints directly as fallback
+    try{
+      const rfs=await fetch(HEALTH_API+'/health/rustfs',{signal:AbortSignal.timeout(5000)});
+      if(rfs.ok){const d=await rfs.json();setHealthDot('health-rustfs-dot','green');$('health-rustfs-text').textContent=d.total_objects+' objects';$('health-usage').textContent=(d.total_size_bytes/1073741824).toFixed(1)+' GB';}
+    }catch(_){}
+    try{
+      const s3r=await fetch(HEALTH_API+'/health/s3',{signal:AbortSignal.timeout(5000)});
+      if(s3r.ok){const d=await s3r.json();setHealthDot('health-s3-dot','green');$('health-s3-text').textContent=d.total_objects+' archived';}
+    }catch(_){}
+  }
+}
+async function fetchStreamsHealth(){
+  try{
+    const res=await fetch(HEALTH_API+'/health/streams',{signal:AbortSignal.timeout(8000)});
+    if(!res.ok)throw new Error('HTTP '+res.status);
+    const streams=await res.json();
+    const total=streams.length, up=streams.filter(s=>s.reachable).length;
+    if(total===0){setHealthDot('health-streams-dot','');$('health-streams-text').textContent='none configured';}
+    else if(up===total){setHealthDot('health-streams-dot','green');$('health-streams-text').textContent=up+'/'+total+' up';}
+    else if(up>0){setHealthDot('health-streams-dot','amber');$('health-streams-text').textContent=up+'/'+total+' up';}
+    else{setHealthDot('health-streams-dot','red');$('health-streams-text').textContent='all down';}
+  }catch(e){
+    setHealthDot('health-streams-dot','');
+    $('health-streams-text').textContent='--';
   }
 }
 function setHealthDot(id,color){
-  const el=$(id);el.classList.remove('green','amber','red');
+  const el=$(id);if(!el)return;el.classList.remove('green','amber','red');
   if(color)el.classList.add(color);
 }
 function updateHealthPanel(h){

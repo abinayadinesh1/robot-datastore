@@ -1211,6 +1211,7 @@ dependencies = [
  "serde",
  "thiserror",
  "toml",
+ "toml_edit",
  "tracing",
 ]
 
@@ -1223,6 +1224,7 @@ dependencies = [
  "aws-sdk-s3",
  "aws-smithy-types",
  "aws-types",
+ "axum",
  "bytes",
  "chrono",
  "frame-bucket-common",
@@ -1235,6 +1237,7 @@ dependencies = [
  "sysinfo",
  "thiserror",
  "tokio",
+ "tower-http 0.5.2",
  "tracing",
  "tracing-subscriber",
 ]

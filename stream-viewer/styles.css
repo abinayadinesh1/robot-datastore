@@ -288,6 +288,16 @@ header {
   color: var(--ink); letter-spacing: 0.04em;
   white-space: nowrap;
 }
+.health-metrics-btn {
+  font-family: var(--serif); font-size: 10px; font-weight: 500;
+  color: var(--ink); letter-spacing: 0.1em; text-transform: uppercase;
+  text-decoration: none; white-space: nowrap;
+  padding: 3px 8px; border: 1px solid var(--ink-dim); border-radius: 3px;
+  transition: background 0.2s, color 0.2s;
+}
+.health-metrics-btn:hover {
+  background: var(--ink); color: #fff;
+}
 
 /* ── MAIN — page-specific layouts ──────────────────────────────────────────── */
 body.page-index main {

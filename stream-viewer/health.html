@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Health Metrics</title>
+<link href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,500;0,700;0,800;1,400;1,500&family=IBM+Plex+Mono:wght@300;400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+<style>
+/* ── HEALTH PAGE LAYOUT ───────────────────────────────────────────────── */
+.hm-page { max-width: 960px; margin: 0 auto; padding: 24px 28px 48px; }
+.hm-back {
+  font-family: var(--serif); font-size: 13px; color: var(--text-dim);
+  text-decoration: none; letter-spacing: 0.06em;
+}
+.hm-back:hover { color: var(--ink); }
+.hm-title {
+  font-family: var(--serif); font-size: 28px; font-weight: 700;
+  color: var(--text); margin: 16px 0 8px; letter-spacing: -0.01em;
+}
+.hm-subtitle {
+  font-family: var(--serif); font-size: 13px; color: var(--text-dim);
+  letter-spacing: 0.04em; margin-bottom: 28px;
+}
+
+/* ── SECTION CARDS ────────────────────────────────────────────────────── */
+.hm-section {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 6px; padding: 20px 24px; margin-bottom: 20px;
+}
+.hm-section-header {
+  display: flex; align-items: center; gap: 10px; margin-bottom: 16px;
+}
+.hm-section-dot {
+  width: 10px; height: 10px; border-radius: 50%; background: var(--text-dim);
+  flex-shrink: 0; transition: background 0.3s;
+}
+.hm-section-dot.green { background: var(--green); }
+.hm-section-dot.amber { background: var(--amber); }
+.hm-section-dot.red { background: #ff3355; }
+.hm-section-title {
+  font-family: var(--serif); font-size: 18px; font-weight: 600;
+  color: var(--text); letter-spacing: 0.02em;
+}
+.hm-live-badge {
+  font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 600;
+  color: #fff; background: var(--green); padding: 2px 8px; border-radius: 3px;
+  letter-spacing: 0.1em; text-transform: uppercase; animation: breathe 2s ease-in-out infinite;
+}
+.hm-section-stats {
+  display: flex; gap: 24px; flex-wrap: wrap; margin-bottom: 16px;
+}
+.hm-stat {
+  display: flex; flex-direction: column; gap: 2px;
+}
+.hm-stat-val {
+  font-family: 'IBM Plex Mono', monospace; font-size: 18px; font-weight: 600;
+  color: var(--ink);
+}
+.hm-stat-label {
+  font-family: var(--serif); font-size: 10px; color: var(--text-dim);
+  letter-spacing: 0.1em; text-transform: uppercase;
+}
+
+/* ── CONTAINER TREE ───────────────────────────────────────────────────── */
+.hm-container {
+  border: 1px solid var(--border); border-radius: 4px;
+  margin-bottom: 10px; overflow: hidden;
+}
+.hm-container-header {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 14px; background: var(--surface2); cursor: pointer;
+  transition: background 0.15s;
+}
+.hm-container-header:hover { background: var(--ink-faint); }
+.hm-container-icon {
+  font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: var(--ink);
+  transition: transform 0.2s;
+}
+.hm-container-header.open .hm-container-icon { transform: rotate(90deg); }
+.hm-container-name {
+  font-family: 'IBM Plex Mono', monospace; font-size: 13px; font-weight: 500;
+  color: var(--text); flex: 1;
+}
+.hm-container-meta {
+  font-family: var(--serif); font-size: 11px; color: var(--text-dim);
+  letter-spacing: 0.04em;
+}
+.hm-container-body {
+  display: none; padding: 0 14px 12px;
+}
+.hm-container-header.open + .hm-container-body { display: block; }
+
+/* ── DATE FOLDERS ─────────────────────────────────────────────────────── */
+.hm-dates {
+  display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0;
+}
+.hm-date-chip {
+  font-family: 'IBM Plex Mono', monospace; font-size: 11px;
+  padding: 3px 8px; background: var(--ink-faint); border-radius: 3px;
+  color: var(--text-mid);
+}
+
+/* ── RECENT OBJECTS TABLE ─────────────────────────────────────────────── */
+.hm-obj-label {
+  font-family: var(--serif); font-size: 10px; color: var(--text-dim);
+  letter-spacing: 0.1em; text-transform: uppercase; margin: 10px 0 6px;
+}
+.hm-obj-list { list-style: none; }
+.hm-obj-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 0; border-bottom: 1px solid var(--border);
+  font-family: 'IBM Plex Mono', monospace; font-size: 11px;
+}
+.hm-obj-item:last-child { border-bottom: none; }
+.hm-obj-key {
+  flex: 1; color: var(--text-mid); overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; direction: rtl;
+  text-align: left;
+}
+.hm-obj-size { color: var(--text-dim); white-space: nowrap; }
+.hm-obj-time { color: var(--text-dim); white-space: nowrap; }
+
+/* ── STREAMS SECTION ──────────────────────────────────────────────────── */
+.hm-stream-row {
+  display: flex; align-items: center; gap: 10px; padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+.hm-stream-row:last-child { border-bottom: none; }
+.hm-stream-dot {
+  width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+}
+.hm-stream-dot.up { background: var(--green); }
+.hm-stream-dot.down { background: #ff3355; }
+.hm-stream-id {
+  font-family: 'IBM Plex Mono', monospace; font-size: 12px;
+  font-weight: 500; color: var(--text);
+}
+.hm-stream-url {
+  font-family: 'IBM Plex Mono', monospace; font-size: 11px;
+  color: var(--text-dim); flex: 1; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* ── LOADING / ERROR ──────────────────────────────────────────────────── */
+.hm-loading {
+  font-family: var(--serif); font-size: 13px; color: var(--text-dim);
+  font-style: italic; padding: 12px 0;
+}
+.hm-error {
+  font-family: 'IBM Plex Mono', monospace; font-size: 11px;
+  color: #ff3355; padding: 8px 12px; background: rgba(255,51,85,0.06);
+  border-radius: 4px;
+}
+</style>
+</head>
+<body class="page-index">
+
+<div class="grid-bg">
+  <div class="grid-canvas">
+    <div class="grid-plane">
+      <div class="grid-vlines"></div>
+      <div class="grid-hlines"></div>
+      <div class="grid-axis-h"></div>
+      <div class="grid-axis-v"></div>
+    </div>
+    <div class="grid-scan"></div>
+  </div>
+  <div class="grid-fade"></div>
+  <div class="grid-topfade"></div>
+</div>
+
+<header>
+  <div class="h-left">
+    <a href="index.html" class="hm-back">&#x2190; back to streams</a>
+  </div>
+  <div class="h-right">
+    <span id="clock" style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--text-dim);letter-spacing:0.08em;">--:--:--</span>
+  </div>
+</header>
+
+<main>
+<div class="hm-page">
+  <h1 class="hm-title">Health Metrics</h1>
+  <p class="hm-subtitle" id="hm-updated">Fetching data...</p>
+
+  <!-- ── RustFS Section ──────────────────────────────────────────────── -->
+  <div class="hm-section" id="sec-rustfs">
+    <div class="hm-section-header">
+      <div class="hm-section-dot" id="rustfs-dot"></div>
+      <span class="hm-section-title">RustFS Storage</span>
+      <span class="hm-live-badge" id="rustfs-live" style="display:none;">LIVE</span>
+    </div>
+    <div class="hm-section-stats" id="rustfs-stats">
+      <div class="hm-loading">Loading...</div>
+    </div>
+    <div id="rustfs-containers"></div>
+  </div>
+
+  <!-- ── S3 Archive Section ──────────────────────────────────────────── -->
+  <div class="hm-section" id="sec-s3">
+    <div class="hm-section-header">
+      <div class="hm-section-dot" id="s3-dot"></div>
+      <span class="hm-section-title">S3 Archive</span>
+      <span class="hm-live-badge" id="s3-live" style="display:none;">LIVE</span>
+    </div>
+    <div class="hm-section-stats" id="s3-stats">
+      <div class="hm-loading">Loading...</div>
+    </div>
+    <div id="s3-containers"></div>
+  </div>
+
+  <!-- ── Streams Section ─────────────────────────────────────────────── -->
+  <div class="hm-section" id="sec-streams">
+    <div class="hm-section-header">
+      <div class="hm-section-dot" id="streams-dot"></div>
+      <span class="hm-section-title">Robot Streams</span>
+    </div>
+    <div id="streams-list">
+      <div class="hm-loading">Checking...</div>
+    </div>
+  </div>
+
+  <!-- ── Disk Section ────────────────────────────────────────────────── -->
+  <div class="hm-section" id="sec-disk">
+    <div class="hm-section-header">
+      <div class="hm-section-dot" id="disk-dot"></div>
+      <span class="hm-section-title">Server Disk</span>
+    </div>
+    <div class="hm-section-stats" id="disk-stats">
+      <div class="hm-loading">Loading...</div>
+    </div>
+  </div>
+</div>
+</main>
+
+<script>
+const $=id=>document.getElementById(id);
+let API_BASE='http://100.81.222.59:8080';
+
+// Clock
+(function tick(){
+  const now=new Date(),pad=n=>String(n).padStart(2,'0');
+  $('clock').textContent=`${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+  setTimeout(tick,1000);
+})();
+
+// Load API base from sources.json
+(async function init(){
+  try{
+    const res=await fetch('sources.json');const data=await res.json();
+    if(data.api_url) API_BASE=data.api_url;
+  }catch(_){}
+  // Fetch all sections in parallel
+  fetchAll();
+  setInterval(fetchAll,15000);
+})();
+
+async function fetchAll(){
+  fetchRustFS();
+  fetchS3();
+  fetchStreams();
+  fetchDisk();
+  $('hm-updated').textContent='Last updated: '+new Date().toLocaleTimeString();
+}
+
+/* ── RustFS ───────────────────────────────────────────────────────────── */
+let prevRustFSCount=null;
+async function fetchRustFS(){
+  try{
+    const res=await fetch(API_BASE+'/health/rustfs',{signal:AbortSignal.timeout(8000)});
+    if(!res.ok)throw new Error('HTTP '+res.status);
+    const d=await res.json();
+
+    // Detect liveness: compare object count to previous
+    const countChanged=prevRustFSCount!==null && d.total_objects!==prevRustFSCount;
+    prevRustFSCount=d.total_objects;
+    const live=d.is_live||countChanged;
+
+    $('rustfs-live').style.display=live?'inline':'none';
+    $('rustfs-dot').className='hm-section-dot '+(live?'green':'green');
+
+    $('rustfs-stats').innerHTML=`
+      <div class="hm-stat"><span class="hm-stat-val">${d.total_objects}</span><span class="hm-stat-label">Objects</span></div>
+      <div class="hm-stat"><span class="hm-stat-val">${formatBytes(d.total_size_bytes)}</span><span class="hm-stat-label">Total Size</span></div>
+      <div class="hm-stat"><span class="hm-stat-val">${d.containers.length}</span><span class="hm-stat-label">Containers</span></div>
+    `;
+    renderContainers($('rustfs-containers'),d.containers);
+  }catch(e){
+    $('rustfs-dot').className='hm-section-dot';
+    $('rustfs-stats').innerHTML=`<div class="hm-error">RustFS unreachable: ${escHtml(e.message)}</div>`;
+    $('rustfs-containers').innerHTML='';
+  }
+}
+
+/* ── S3 Archive ───────────────────────────────────────────────────────── */
+let prevS3Count=null;
+async function fetchS3(){
+  try{
+    const res=await fetch(API_BASE+'/health/s3',{signal:AbortSignal.timeout(8000)});
+    if(!res.ok){const b=await res.clone().json().catch(()=>({}));throw new Error(b.hint||b.error||'HTTP '+res.status);}
+    const d=await res.json();
+
+    const countChanged=prevS3Count!==null && d.total_objects!==prevS3Count;
+    prevS3Count=d.total_objects;
+    const live=d.is_live||countChanged;
+
+    $('s3-live').style.display=live?'inline':'none';
+    $('s3-dot').className='hm-section-dot '+(d.total_objects>0?'green':'');
+
+    $('s3-stats').innerHTML=`
+      <div class="hm-stat"><span class="hm-stat-val">${d.total_objects}</span><span class="hm-stat-label">Archived Objects</span></div>
+      <div class="hm-stat"><span class="hm-stat-val">${formatBytes(d.total_size_bytes)}</span><span class="hm-stat-label">Total Size</span></div>
+      <div class="hm-stat"><span class="hm-stat-val">${d.containers.length}</span><span class="hm-stat-label">Containers</span></div>
+    `;
+    renderContainers($('s3-containers'),d.containers);
+  }catch(e){
+    $('s3-dot').className='hm-section-dot';
+    $('s3-stats').innerHTML=`<div class="hm-error">S3 archive: ${escHtml(e.message)}</div>`;
+    $('s3-containers').innerHTML='';
+  }
+}
+
+/* ── Streams ──────────────────────────────────────────────────────────── */
+async function fetchStreams(){
+  try{
+    const res=await fetch(API_BASE+'/health/streams',{signal:AbortSignal.timeout(10000)});
+    if(!res.ok)throw new Error('HTTP '+res.status);
+    const streams=await res.json();
+    const total=streams.length,up=streams.filter(s=>s.reachable).length;
+
+    if(total===0){
+      $('streams-dot').className='hm-section-dot';
+      $('streams-list').innerHTML='<div class="hm-loading">No streams configured</div>';
+      return;
+    }
+    $('streams-dot').className='hm-section-dot '+(up===total?'green':up>0?'amber':'red');
+
+    let html='';
+    for(const s of streams){
+      html+=`<div class="hm-stream-row">
+        <div class="hm-stream-dot ${s.reachable?'up':'down'}"></div>
+        <span class="hm-stream-id">${escHtml(s.robot_id)}</span>
+        <span class="hm-stream-url">${escHtml(s.stream_url)}</span>
+      </div>`;
+    }
+    $('streams-list').innerHTML=html;
+  }catch(e){
+    $('streams-dot').className='hm-section-dot';
+    $('streams-list').innerHTML=`<div class="hm-error">Cannot check streams: ${escHtml(e.message)}</div>`;
+  }
+}
+
+/* ── Disk ─────────────────────────────────────────────────────────────── */
+async function fetchDisk(){
+  try{
+    const res=await fetch(API_BASE+'/health',{signal:AbortSignal.timeout(5000)});
+    if(!res.ok)throw new Error('HTTP '+res.status);
+    const h=await res.json();
+    const disk=h.disk||{};
+    if(!disk.status){$('disk-stats').innerHTML='<div class="hm-loading">No disk data</div>';return;}
+
+    $('disk-dot').className='hm-section-dot '+(disk.status==='critical'?'red':disk.status==='pressure'?'amber':'green');
+    $('disk-stats').innerHTML=`
+      <div class="hm-stat"><span class="hm-stat-val">${(disk.used_gb||0).toFixed(1)} GB</span><span class="hm-stat-label">Used</span></div>
+      <div class="hm-stat"><span class="hm-stat-val">${(disk.total_gb||0).toFixed(1)} GB</span><span class="hm-stat-label">Total</span></div>
+      <div class="hm-stat"><span class="hm-stat-val">${(disk.free_gb||0).toFixed(1)} GB</span><span class="hm-stat-label">Free</span></div>
+      <div class="hm-stat"><span class="hm-stat-val">${(disk.usage_pct||0).toFixed(1)}%</span><span class="hm-stat-label">Usage</span></div>
+    `;
+  }catch(e){
+    $('disk-dot').className='hm-section-dot';
+    $('disk-stats').innerHTML=`<div class="hm-error">API unreachable: ${escHtml(e.message)}</div>`;
+  }
+}
+
+/* ── Render containers (shared by RustFS and S3) ─────────────────────── */
+function renderContainers(el,containers){
+  if(!containers||containers.length===0){el.innerHTML='<div class="hm-loading">No containers found</div>';return;}
+  let html='';
+  for(const c of containers){
+    html+=`<div class="hm-container">
+      <div class="hm-container-header" onclick="this.classList.toggle('open')">
+        <span class="hm-container-icon">&#x25B6;</span>
+        <span class="hm-container-name">${escHtml(c.name)}/</span>
+        <span class="hm-container-meta">${c.date_count} date folder${c.date_count!==1?'s':''}</span>
+      </div>
+      <div class="hm-container-body">
+        <div class="hm-dates">${c.recent_dates.map(d=>`<span class="hm-date-chip">${escHtml(d)}</span>`).join('')}</div>
+        ${c.recent_objects.length>0?`
+          <div class="hm-obj-label">Last ${c.recent_objects.length} objects</div>
+          <ul class="hm-obj-list">
+            ${c.recent_objects.map(o=>`<li class="hm-obj-item">
+              <span class="hm-obj-key" title="${escHtml(o.key)}">${escHtml(shortKey(o.key))}</span>
+              <span class="hm-obj-size">${formatBytes(o.size_bytes)}</span>
+              <span class="hm-obj-time">${formatTime(o.last_modified)}</span>
+            </li>`).join('')}
+          </ul>
+        `:'<div class="hm-loading">No objects</div>'}
+      </div>
+    </div>`;
+  }
+  el.innerHTML=html;
+}
+
+/* ── Helpers ──────────────────────────────────────────────────────────── */
+function formatBytes(b){
+  if(b==null)return'--';
+  if(b<1024)return b+' B';
+  if(b<1048576)return(b/1024).toFixed(1)+' KB';
+  if(b<1073741824)return(b/1048576).toFixed(1)+' MB';
+  return(b/1073741824).toFixed(2)+' GB';
+}
+function formatTime(iso){
+  if(!iso)return'--';
+  try{const d=new Date(iso);return d.toLocaleTimeString();}catch(_){return iso;}
+}
+function shortKey(k){
+  // Show just the filename from the full S3 key
+  const parts=k.split('/');return parts[parts.length-1]||k;
+}
+function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+</script>
+</body>
+</html>
