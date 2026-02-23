@@ -55,6 +55,9 @@ pub struct RecordingStateMachine {
     robot_id: String,
     /// Frame-size heuristic filter for H.264 streams.
     frame_size_filter: FrameSizeFilter,
+    /// Counts frames spent in the current state (reset on transitions).
+    /// Used to throttle debug logging to every 100 frames.
+    frames_in_current_state: u64,
 }
 
 impl RecordingStateMachine {
@@ -78,10 +81,11 @@ impl RecordingStateMachine {
             prefix,
             robot_id,
             frame_size_filter: FrameSizeFilter::new(spike_ratio),
+            frames_in_current_state: 0,
         }
     }
 
-    /// Process one incoming frame from Kafka. This is the main entry point.
+    /// Process one incoming frame. This is the main entry point.
     pub async fn process_frame(&mut self, frame: &TimestampedFrame) {
         match &frame.payload {
             FramePayload::Jpeg(jpeg_data) => {
@@ -151,12 +155,16 @@ impl RecordingStateMachine {
         let dist = hamming(initial_hash_ref, hash);
 
         if dist <= self.phash_threshold {
-            debug!(
-                dist,
-                threshold = self.phash_threshold,
-                ts = frame.captured_at_ms,
-                "IDLE: frame similar to baseline"
-            );
+            self.frames_in_current_state += 1;
+            if self.frames_in_current_state % 100 == 0 {
+                debug!(
+                    dist,
+                    threshold = self.phash_threshold,
+                    ts = frame.captured_at_ms,
+                    frames_in_state = self.frames_in_current_state,
+                    "IDLE: frame similar to baseline"
+                );
+            }
             return RecordingState::Idle {
                 initial_payload,
                 is_h264: false,
@@ -166,6 +174,7 @@ impl RecordingStateMachine {
             };
         }
 
+        self.frames_in_current_state = 0;
         info!(
             dist,
             threshold = self.phash_threshold,
@@ -261,14 +270,19 @@ impl RecordingStateMachine {
         let dist = hamming(prev_hash, hash);
         if dist <= self.phash_threshold {
             consecutive_idle_count += 1;
-            debug!(
-                dist,
-                consecutive_idle_count,
-                threshold = self.config.active_to_idle_consecutive_frames,
-                "ACTIVE: consecutive similar frame"
-            );
+            self.frames_in_current_state += 1;
+            if self.frames_in_current_state % 100 == 0 {
+                debug!(
+                    dist,
+                    consecutive_idle_count,
+                    threshold = self.config.active_to_idle_consecutive_frames,
+                    frames_in_state = self.frames_in_current_state,
+                    "ACTIVE: consecutive similar frame"
+                );
+            }
 
             if consecutive_idle_count >= self.config.active_to_idle_consecutive_frames {
+                self.frames_in_current_state = 0;
                 info!(
                     consecutive_idle_count,
                     segment_start_ms, "ACTIVE→IDLE: scene stabilized, finalizing active segment"
@@ -293,6 +307,7 @@ impl RecordingStateMachine {
                 consecutive_idle_count,
             }
         } else {
+            self.frames_in_current_state += 1;
             RecordingState::Active {
                 encoder,
                 is_h264: false,
@@ -388,12 +403,16 @@ impl RecordingStateMachine {
             } => {
                 if !is_active {
                     // Still idle
-                    debug!(
-                        frame_size,
-                        nal_type,
-                        ts = frame.captured_at_ms,
-                        "IDLE (H.264): scene quiet"
-                    );
+                    self.frames_in_current_state += 1;
+                    if self.frames_in_current_state % 100 == 0 {
+                        debug!(
+                            frame_size,
+                            nal_type,
+                            ts = frame.captured_at_ms,
+                            frames_in_state = self.frames_in_current_state,
+                            "IDLE (H.264): scene quiet"
+                        );
+                    }
                     self.state = Some(RecordingState::Idle {
                         initial_payload,
                         is_h264: true,
@@ -403,6 +422,7 @@ impl RecordingStateMachine {
                     });
                 } else {
                     // Scene changed → ACTIVE
+                    self.frames_in_current_state = 0;
                     info!(
                         frame_size,
                         nal_type, idle_start_ms, "IDLE→ACTIVE (H.264): motion detected"
@@ -483,13 +503,18 @@ impl RecordingStateMachine {
                 // Check Active→Idle: count consecutive quiet P-frames
                 if self.frame_size_filter.is_quiet(frame_size) {
                     consecutive_idle_count += 1;
-                    debug!(
-                        frame_size,
-                        consecutive_idle_count,
-                        threshold = self.config.active_to_idle_consecutive_frames,
-                        "ACTIVE (H.264): quiet frame"
-                    );
+                    self.frames_in_current_state += 1;
+                    if self.frames_in_current_state % 100 == 0 {
+                        debug!(
+                            frame_size,
+                            consecutive_idle_count,
+                            threshold = self.config.active_to_idle_consecutive_frames,
+                            frames_in_state = self.frames_in_current_state,
+                            "ACTIVE (H.264): quiet frame"
+                        );
+                    }
                     if consecutive_idle_count >= self.config.active_to_idle_consecutive_frames {
+                        self.frames_in_current_state = 0;
                         info!(
                             consecutive_idle_count,
                             segment_start_ms, "ACTIVE→IDLE (H.264): scene stabilized"
@@ -507,6 +532,7 @@ impl RecordingStateMachine {
                     }
                 } else {
                     consecutive_idle_count = 0;
+                    self.frames_in_current_state += 1;
                 }
 
                 self.state = Some(RecordingState::Active {

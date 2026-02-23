@@ -1,5 +1,5 @@
 [[robots]]
-robot_id = "reachy-001"
+robot_id = "reachy-002"
 stream_url = "http://100.107.96.29:8000/api/camera/stream"
 mode = "h264"
 h264_url = "100.107.96.29:9001"
@@ -22,14 +22,14 @@ prefix = ""   # keys.rs builds the full path: {robot_id}/camera/{date}/...
 
 [eviction]
 check_interval_secs = 30
-threshold_gb = 5           # evict to S3 when local RustFS storage exceeds this
+threshold_gb = 1.2           # evict to S3 when local RustFS storage exceeds this
 target_gb = 1              # evict until storage drops below this
 batch_size = 50
 fallback_threshold_gb = 50 # in fallback (S3 down), only delete locally above this — keeps data as long as possible
 
 [aws_s3]
 bucket = "reachy-mini-frames-archive"
-prefix = "archive/"
+prefix = ""
 region = "us-west-2"
 
 [logging]

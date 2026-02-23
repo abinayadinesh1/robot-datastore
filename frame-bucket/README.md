@@ -1,74 +1,78 @@
 # frame-bucket
 
-Kafka-driven camera frame pipeline for streaming, storing, searching, and labelling video data. Captures MJPEG frames from a robot's camera daemon, filters out redundant frames using perceptual hashing, and stores unique frames in RustFS (S3-compatible object storage) in a circular buffer. Data is saved locally until 80% full disk, upon which oldest data is backed up to an S3 bucket.
+Multi-robot camera frame pipeline for streaming, storing, searching, and labelling video data. Captures MJPEG or H.264 frames from robot cameras, filters out redundant frames using perceptual hashing (JPEG) or frame-size spike detection (H.264), and stores unique frames in RustFS (S3-compatible object storage). A background eviction task archives old data to AWS S3 when local disk exceeds the configured threshold.
 
 ## Architecture
 
 ```
 [Robot A camera :8000]                   [RustFS :9000]            [AWS S3]
-        | MJPEG stream                         ^  |                      ^
-        v                                      |  |                      |
-+-- Producer (robot_id="reachy-001") --+       |  |                      |
-| Parse MJPEG ->                        |       |  |                      |
-| key="reachy-001:{timestamp_ms}"       |       |  |                      |
-| Produce to Kafka "camera.frames"      |       |  |                      |
-+-------+-------------------------------+       |  |                      |
-        |                                       |  |                      |
-        +---- Kafka "camera.frames" +-----------+  |                      |
-        |     partition 0: reachy-001 frames    |  |                      |
-        |     partition 1: bracketbot-001 frames|  |                      |
-        |                                       |  |                      |
-+-- Consumer --------------------------------+-+  |                      |
-| Parse robot_id from Kafka key               |    |                      |
-| Filter (aHash) -> Store to RustFS           |    |                      |
-| Record segments: ACTIVE (MP4) / IDLE (JPEG) |    |                      |
-| SQLite: {robot_id}.db per robot             |    |                      |
-| Monitor disk -> Evict oldest to AWS         |    |                      |
-+---------------------------------------------+   |                      |
-                                                   |                      |
-+-- API Server :8080 -----------------------------+|                      |
-| /robots/{id}/segments   - list/query segments    |                      |
-| /robots/{id}/timeline   - scrubber time range    |                      |
-| /robots/{id}/collections - CRUD collections      |                      |
-| /robots/{id}/collections/{id}/clips - CRUD clips |                      |
-| Proxies video URLs -> RustFS                     |                      |
-| Writes clip manifests -> labelled-data bucket    |                      |
-+--------------------------------------------------+                      |
-        |                                                                 |
-+-- Stream Viewer :3000 -------+                                          |
-| index.html - live grid view  |                                          |
-| robot.html - live + playback |                                          |
-|   View Mode: scrubber, clips |                                          |
-|   collections, labeling      |                                          |
-+------------------------------+                                          |
+        | MJPEG / H.264 stream                ^  |                      ^
+        v                                     |  |                      |
+[Robot B camera :8000]                        |  |                      |
+        | MJPEG / H.264 stream                |  |                      |
+        v                                     |  |                      |
++-- Pipeline (multi-robot) -----------------+-+  |                      |
+| Per robot (tokio task):                    |    |                      |
+|   Capture stream (MJPEG/polling/H.264)     |    |                      |
+|   -> mpsc channel (backpressure)           |    |                      |
+|   -> Filter (aHash or frame-size spike)    |    |                      |
+|   -> Record: ACTIVE (MP4) / IDLE (JPEG)    |    |                      |
+|   -> Store to RustFS                       |    |                      |
+|   -> SQLite: {robot_id}.db per robot       |    |                      |
+| Shared:                                    |    |                      |
+|   Eviction loop -> archive to AWS S3       |    |                      |
++--------------------------------------------+   |                      |
+                                                  |                      |
++-- API Server :8080 ----------------------------+|                      |
+| /robots/{id}/segments   - list/query segments   |                      |
+| /robots/{id}/timeline   - scrubber time range   |                      |
+| /robots/{id}/collections - CRUD collections     |                      |
+| /robots/{id}/collections/{id}/clips - CRUD clips|                      |
+| Proxies video URLs -> RustFS                    |                      |
+| Writes clip manifests -> labelled-data bucket   |                      |
++-------------------------------------------------+                      |
+        |                                                                |
++-- Stream Viewer :3000 -------+                                         |
+| index.html - live grid view  |                                         |
+| robot.html - live + playback |                                         |
+|   View Mode: scrubber, clips |                                         |
+|   collections, labeling      |                                         |
++------------------------------+                                         |
 ```
 
-**Producer** — connects to a camera's MJPEG stream (or polls single frames), wraps each JPEG in a `TimestampedFrame` (8-byte timestamp + 8-byte seq + JPEG payload), sets the Kafka message key to `{robot_id}:{timestamp_ms}`, and publishes to the shared `camera.frames` topic.
+**Pipeline** — a single binary that manages all robots. Each robot gets its own tokio task with a capture loop, bounded channel for backpressure, filter, recording state machine, and SQLite database. Robots are configured via `[[robots]]` entries in `config.toml`. Supports three capture modes: MJPEG streaming, HTTP polling, and H.264 TCP (MPEG-TS).
 
-**Kafka partitioning** — the `robot_id` prefix in the message key routes all frames from a given robot to the same partition. This guarantees per-robot ordering (sequence numbers are meaningful) and ensures the perceptual hash filter only compares frames from the same robot — never across robots.
+**Filtering** — JPEG frames are filtered using aHash perceptual hashing (16x16 grid = 256 bits, hamming distance comparison). H.264 frames use P-frame size spike detection to identify scene changes without decoding pixels.
 
-**Consumer** — reads from Kafka, extracts `robot_id` from the message key, runs each frame through an aHash perceptual hash filter (16x16 grid = 256 bits, hamming distance comparison), and stores frames that differ enough from the last accepted frame into RustFS under a per-robot path. A background eviction task monitors disk usage and archives old frames to AWS S3 when disk exceeds 80%.
+**Recording** — the state machine switches between IDLE (stores a single representative JPEG) and ACTIVE (encodes frames to 60-second MP4 segments via ffmpeg). Transitions are based on filter output.
+
+**Eviction** — a shared background task monitors RustFS disk usage and archives the oldest objects to AWS S3 when the configured threshold is exceeded. Falls back to delete-only mode if S3 is unreachable.
 
 ## Project Structure
 
 ```
 frame-bucket/
 ├── config.toml              # runtime configuration
-├── docker-compose.yml       # Kafka + RustFS containers
-├── producer/                # MJPEG ingestion -> Kafka
-├── consumer/                # Kafka -> filter -> RustFS storage
+├── docker-compose.yml       # RustFS container
+├── pipeline/                # capture -> filter -> RustFS (single binary)
 │   └── src/
+│       ├── capture/
+│       │   ├── mjpeg.rs     # MJPEG stream + HTTP polling capture
+│       │   └── h264.rs      # H.264 TCP (MPEG-TS) capture
 │       ├── filter/
-│       │   ├── phash.rs     # perceptual hash (primary)
+│       │   ├── phash.rs     # perceptual hash (primary for JPEG)
+│       │   ├── framesize.rs # P-frame spike detection (for H.264)
 │       │   └── histogram.rs # histogram comparison (alt)
 │       ├── recorder/
-│       │   └── encoder.rs   # FFmpeg MP4 segment encoding
+│       │   ├── state.rs     # IDLE/ACTIVE state machine
+│       │   ├── encoder.rs   # FFmpeg MP4 segment encoding
+│       │   └── keys.rs      # RustFS object key generation
 │       ├── db.rs            # SQLite: segments, collections, clips
 │       ├── storage.rs       # RustFS S3 client
 │       └── eviction.rs      # disk monitor + AWS S3 archival
 ├── api/                     # HTTP API server (Axum)
 │   └── src/main.rs          # REST endpoints for segments, collections, clips
-├── common/                  # shared config + frame serialization
+├── common/                  # shared config + frame types
 ├── check_bucket.py          # inspect stored frames
 └── phash_compare.py         # compare two images with aHash
 
@@ -123,7 +127,7 @@ ffmpeg -encoders 2>/dev/null | grep -E "libx26[45]"
 #  V..... libx265     libx265 H.265 / HEVC
 ```
 
-If ffmpeg is missing or encoders are absent, the consumer will log a warning at startup and fall back to IDLE-only mode (no MP4 encoding).
+If ffmpeg is missing or encoders are absent, the pipeline will log a warning at startup and fall back to IDLE-only mode (no MP4 encoding).
 
 ## Running
 
@@ -135,57 +139,47 @@ docker compose up -d
 ```
 
 This starts:
-- **Kafka** (KRaft mode) on `localhost:9092`
 - **RustFS** on `localhost:9000` (S3 API) / `localhost:9001` (console)
 
-### 2. Create the Kafka topic (first time only)
-
-Create with enough partitions to accommodate your robot fleet (one partition per robot for maximum parallelism):
+### 2. Build
 
 ```bash
-docker exec frame-bucket-kafka-1 \
-  /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 \
-  --create --topic camera.frames --partitions 3
-```
-
-### 3. Install Deps and Build
-
-```bash
-sudo apt install libcurl4-openssl-dev cmake pkg-config -y
 cargo build --release
 ```
 
-### 4. Run producers and consumer
+### 3. Configure robots
 
-Each robot runs its own producer pointed at its camera. All producers publish to the same Kafka topic. One consumer handles all robots.
+Edit `config.toml` to add your robots. Each `[[robots]]` entry defines a robot and its camera stream:
+
+```toml
+[[robots]]
+robot_id = "reachy-001"
+stream_url = "http://100.107.96.29:8000/api/camera/stream"
+mode = "h264"                    # "mjpeg", "polling", or "h264"
+h264_url = "100.107.96.29:9001"  # required when mode = "h264"
+fps = 30.0
+quality = 80
+
+[[robots]]
+robot_id = "bracketbot-001"
+stream_url = "http://192.168.1.42:8003/stream"
+mode = "mjpeg"
+fps = 10.0
+```
+
+### 4. Run the pipeline
+
+A single binary handles all robots:
 
 ```bash
-# Robot A producer — robot_id overrides aws_s3.robot_id in config.toml
-RUST_LOG=info ./target/release/frame-bucket-producer reachy-001
-
-# Robot B producer
-RUST_LOG=info ./target/release/frame-bucket-producer bracketbot-001
-
-# Consumer (filters + stores to RustFS, handles all robots)
-RUST_LOG=info ./target/release/frame-bucket-consumer
+RUST_LOG=info ./target/release/frame-bucket-pipeline
 ```
 
-Both binaries load `config.toml` from the current directory. Both producer args are optional and fall back to config values if omitted:
-
-```
-frame-bucket-producer [robot_id] [stream_url]
-```
-
-With a single shared `config.toml`, each robot just needs its identity and camera URL at launch:
-
-```bash
-./target/release/frame-bucket-producer reachy-001 http://100.107.96.29:8000/api/camera/stream
-./target/release/frame-bucket-producer bracketbot-001 http://192.168.1.42:8003/stream
-```
+The pipeline spawns a tokio task per robot. Each task captures frames, filters, encodes, and stores to RustFS independently. Add or remove robots by editing `config.toml` and restarting.
 
 ### 5. Run the API server
 
-The API server provides REST endpoints for querying segments, managing collections/clips, and proxying video URLs. It reads the same `config.toml` and connects to RustFS + the per-robot SQLite databases created by the consumer.
+The API server provides REST endpoints for querying segments, managing collections/clips, and proxying video URLs. It reads the same `config.toml` and connects to RustFS + the per-robot SQLite databases created by the pipeline.
 
 ```bash
 cd frame-bucket
@@ -215,24 +209,25 @@ In the single robot view, click "View Mode" to access the scrubber, clip selecti
 
 ## Configuration
 
-Edit `config.toml` (or a per-robot variant) to tune behavior. Key settings:
+Edit `config.toml` to tune behavior. Key settings:
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `aws_s3.robot_id` | `"reachy-001"` | Robot identifier. Used as the Kafka partition key prefix and the RustFS path prefix (`frames/{robot_id}/`). Must be unique per robot. |
+| `robots[].robot_id` | — | Robot identifier. Used as the RustFS path prefix (`{robot_id}/camera/`). Must be unique per robot. |
+| `robots[].stream_url` | — | Camera stream URL. Reachy: `http://<ip>:8000/api/camera/stream`. |
+| `robots[].mode` | `"mjpeg"` | `"mjpeg"` for streaming, `"polling"` for single-frame polling, `"h264"` for H.264 TCP. |
+| `robots[].fps` | 10.0 | Target FPS for stream/poll rate. |
 | `filter.phash_threshold` | 26 | Hamming distance threshold (out of 256 bits). Higher = stricter filtering. 26 ~ 10% difference. |
-| `filter.phash_hash_size` | 16 | Hash grid size. 16x16 = 256-bit hash. |
-| `stream.url` | — | Camera stream URL. Reachy: `http://<ip>:8000/api/camera/stream`. BracketBot: `http://<ip>:8003/stream`. |
-| `stream.mode` | `"mjpeg"` | `"mjpeg"` for streaming, `"polling"` for single-frame polling. |
-| `stream.fps` | 10.0 | Target FPS for stream/poll rate. |
-| `eviction.threshold_percent` | 80.0 | Disk usage % that triggers eviction to AWS S3. |
+| `filter.spike_ratio` | 4.0 | H.264 P-frame size spike ratio for activity detection. |
+| `eviction.threshold_gb` | 50.0 | RustFS storage size (GB) that triggers eviction to AWS S3. |
+| `eviction.target_gb` | 40.0 | Evict until storage drops below this (GB). |
 
 
 ## Verifying Stored Images
 
 ### Browse the RustFS console
 
-Open **http://localhost:9001** in a browser. Log in with `rustfsadmin` / `rustfsadmin`. Navigate to the `camera-frames` bucket to browse and preview stored JPEGs, organized under `frames/{robot_id}/`.
+Open **http://localhost:9001** in a browser. Log in with `rustfsadmin` / `rustfsadmin`. Navigate to the `camera-frames` bucket to browse and preview stored JPEGs, organized under `{robot_id}/`.
 
 ### List frames with the helper script
 
@@ -298,11 +293,11 @@ Hash size:  16x16 = 256 bits
 Hamming distance: 31 / 256  (12.1%)
 ```
 
-If the distance is above your configured threshold (26), the consumer would accept both frames as distinct. If below, the second frame would be filtered out as redundant.
+If the distance is above your configured threshold (26), the pipeline would accept both frames as distinct. If below, the second frame would be filtered out as redundant.
 
 ## AWS Credentials (for S3 archival)
 
-The consumer's eviction task uploads old frames to AWS S3 when local disk exceeds the threshold. It uses the standard AWS credential chain — no credentials are stored in `config.toml`.
+The pipeline's eviction task uploads old frames to AWS S3 when local disk exceeds the threshold. It uses the standard AWS credential chain — no credentials are stored in `config.toml`.
 
 ### Setup
 
@@ -318,27 +313,26 @@ AWS_SECRET_ACCESS_KEY=your_secret_key_here
 AWS_DEFAULT_REGION=us-west-2
 ```
 
-`.env` is gitignored. Source it before running the consumer:
+`.env` is gitignored. Source it before running the pipeline:
 
 ```bash
 source .env
-RUST_LOG=info ./target/release/frame-bucket-consumer
+RUST_LOG=info ./target/release/frame-bucket-pipeline
 ```
 
 Or inline:
 
 ```bash
-AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... ./target/release/frame-bucket-consumer
+AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... ./target/release/frame-bucket-pipeline
 ```
 
-If no credentials are available, S3 uploads will fail (logged as errors) but the consumer keeps running — frames stay in RustFS and eviction is skipped.
+If no credentials are available, S3 uploads will fail (logged as errors) but the pipeline keeps running — frames stay in RustFS and eviction is skipped.
 
 ## Stopping
 
 ```bash
-# Kill producer/consumer
-pkill -f frame-bucket-producer
-pkill -f frame-bucket-consumer
+# Kill pipeline
+pkill -f frame-bucket-pipeline
 
 # Stop infrastructure
 docker compose down

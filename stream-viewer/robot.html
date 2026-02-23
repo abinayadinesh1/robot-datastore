@@ -261,7 +261,7 @@ function switchMode(mode) {
 // ── Live feed (WebRTC with MJPEG fallback) ───────────────────────────────
 if(!url && !webrtcUrl){
   document.getElementById('overlay-text').textContent = 'No URL provided';
-  document.getElementById('status-dot').style.background='#a83020';
+  document.getElementById('status-dot').style.background='#ff3355';
   document.getElementById('status-text').textContent='error';
 } else {
   const videoEl = document.getElementById('stream-video');
@@ -286,7 +286,7 @@ if(!url && !webrtcUrl){
     overlay.style.display='flex';
     overlay.querySelector('.status-cross').style.animation='none';
     ovText.textContent=secs>0?`Retry in ${secs}s`:'Reconnecting';
-    dot.style.background='#a83020'; stText.textContent=secs>0?`retry ${secs}s`:'reconnecting';
+    dot.style.background='#ff3355'; stText.textContent=secs>0?`retry ${secs}s`:'reconnecting';
   }
 
   function startMjpegFallback(){

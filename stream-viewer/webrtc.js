@@ -36,15 +36,35 @@ function connectWebRTC(videoEl, signalingUrl, peerId, callbacks) {
         roles: ['listener'],
         meta: { name: 'stream-viewer' }
       }));
-      // Request session with the producer
-      ws.send(JSON.stringify({
-        type: 'startSession',
-        peerId: peerId
-      }));
+      // List producers to find the one matching our peerId by meta.name
+      // (GStreamer webrtcsink uses UUIDs as peer IDs, not the meta name)
+      ws.send(JSON.stringify({ type: 'list' }));
     };
 
     ws.onmessage = (event) => {
       const msg = JSON.parse(event.data);
+
+      if (msg.type === 'list') {
+        console.log('Producers:', JSON.stringify(msg.producers));  // add this
+        // Find producer by meta.name matching our peerId
+        const producer = (msg.producers || []).find(
+          p => p.meta && p.meta.name === peerId
+        );
+        if (producer) {
+          console.log('Found producer:', producer.id, 'name:', peerId);
+          ws.send(JSON.stringify({
+            type: 'startSession',
+            peerId: producer.id
+          }));
+        } else {
+          // Fallback: try using peerId directly (older protocol)
+          console.warn('Producer not found by name, trying direct peerId:', peerId);
+          ws.send(JSON.stringify({
+            type: 'startSession',
+            peerId: peerId
+          }));
+        }
+      }
 
       if (msg.type === 'sessionStarted') {
         sessionId = msg.sessionId;
