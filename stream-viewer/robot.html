@@ -98,6 +98,19 @@
       <span id="segment-count" class="text-dim" style="margin-left:8px;"></span>
     </div>
 
+    <!-- Data calendar -->
+    <div class="data-calendar" id="data-calendar" style="display:none;">
+      <div class="cal-nav">
+        <button class="btn-ghost cal-nav-btn" id="cal-prev">&#x2039;</button>
+        <span class="cal-month-label" id="cal-month-label"></span>
+        <button class="btn-ghost cal-nav-btn" id="cal-next">&#x203a;</button>
+      </div>
+      <div class="cal-weekdays">
+        <span>Su</span><span>Mo</span><span>Tu</span><span>We</span><span>Th</span><span>Fr</span><span>Sa</span>
+      </div>
+      <div class="cal-grid" id="cal-grid"></div>
+    </div>
+
     <!-- Playback area -->
     <div class="stream-box" id="playback-box">
       <div class="status-overlay" id="playback-overlay">
@@ -165,7 +178,15 @@ const url       = getParam('url');
 const webrtcUrl = getParam('webrtc_url');
 const peerId    = getParam('peer_id') || 'reachymini';
 const robotId   = getParam('robot_id') || 'reachy-001';
-const apiBase   = 'http://100.81.222.59:8080';
+const initMode  = getParam('mode') || 'live';
+let apiBase     = 'http://100.81.222.59:8080'; // fallback; overridden by sources.json
+(async () => {
+  try {
+    const res = await fetch('sources.json');
+    const data = await res.json();
+    if (data.api_url) apiBase = data.api_url;
+  } catch (_) {}
+})();
 
 // ── Populate UI labels ───────────────────────────────────────────────────
 document.title = label + ' — Stream Viewer';
@@ -249,6 +270,7 @@ function switchMode(mode) {
 
   if (mode === 'view') {
     fetchCollections();
+    fetchActiveDates();
     // Default date range: today
     const today = new Date().toISOString().slice(0, 10);
     if (!$dateStart.value) $dateStart.value = today;
@@ -795,6 +817,94 @@ document.getElementById('btn-download').addEventListener('click', async () => {
     console.error('Download failed:', e);
   }
 });
+
+// ── Active dates & calendar ──────────────────────────────────────────────
+let activeDatesSet = new Set(); // YYYY-MM-DD strings
+let calYear = new Date().getFullYear();
+let calMonth = new Date().getMonth(); // 0-indexed
+
+const $calendar    = document.getElementById('data-calendar');
+const $calGrid     = document.getElementById('cal-grid');
+const $calLabel    = document.getElementById('cal-month-label');
+const $calPrev     = document.getElementById('cal-prev');
+const $calNext     = document.getElementById('cal-next');
+
+async function fetchActiveDates() {
+  // Always show the calendar; populate data-dots if the API responds
+  $calendar.style.display = '';
+  renderCalendar();
+  try {
+    const resp = await fetch(`${apiBase}/robots/${robotId}/active-dates`, {signal: AbortSignal.timeout(8000)});
+    if (!resp.ok) return;
+    const data = await resp.json();
+    activeDatesSet = new Set(data.dates || []);
+    if (activeDatesSet.size > 0) {
+      // Navigate to the most recent month with data
+      const sorted = [...activeDatesSet].sort();
+      const latest = sorted[sorted.length - 1];
+      const d = new Date(latest + 'T00:00:00');
+      calYear = d.getFullYear();
+      calMonth = d.getMonth();
+    }
+    renderCalendar();
+  } catch (e) {
+    console.warn('Failed to fetch active dates:', e);
+  }
+}
+
+function renderCalendar() {
+  const monthNames = ['January','February','March','April','May','June',
+                      'July','August','September','October','November','December'];
+  $calLabel.textContent = `${monthNames[calMonth]} ${calYear}`;
+  $calGrid.innerHTML = '';
+
+  const firstDay = new Date(calYear, calMonth, 1).getDay(); // 0=Sun
+  const daysInMonth = new Date(calYear, calMonth + 1, 0).getDate();
+  const today = new Date().toISOString().slice(0, 10);
+
+  // Leading empty cells
+  for (let i = 0; i < firstDay; i++) {
+    const blank = document.createElement('div');
+    blank.className = 'cal-cell cal-blank';
+    $calGrid.appendChild(blank);
+  }
+
+  for (let day = 1; day <= daysInMonth; day++) {
+    const dateStr = `${calYear}-${String(calMonth+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+    const hasData = activeDatesSet.has(dateStr);
+    const isToday = dateStr === today;
+
+    const cell = document.createElement('div');
+    cell.className = 'cal-cell' + (hasData ? ' has-data' : '') + (isToday ? ' is-today' : '');
+    cell.innerHTML = `<span class="cal-day-num">${day}</span>${hasData ? '<span class="cal-dot"></span>' : ''}`;
+    cell.title = hasData ? `${dateStr} — has data` : dateStr;
+
+    if (hasData) {
+      cell.addEventListener('click', () => {
+        document.getElementById('date-start').value = dateStr;
+        document.getElementById('date-end').value   = dateStr;
+        loadTimeline();
+      });
+    }
+    $calGrid.appendChild(cell);
+  }
+}
+
+$calPrev.addEventListener('click', () => {
+  calMonth--;
+  if (calMonth < 0) { calMonth = 11; calYear--; }
+  renderCalendar();
+});
+$calNext.addEventListener('click', () => {
+  calMonth++;
+  if (calMonth > 11) { calMonth = 0; calYear++; }
+  renderCalendar();
+});
+
+// ── Auto-switch to view mode if URL param says so ────────────────────────
+if (initMode === 'view') {
+  switchMode('view');
+}
 </script>
 </body>
 </html>

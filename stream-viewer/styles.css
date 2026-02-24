@@ -96,7 +96,7 @@ body {
 }
 
 /* ── Z-INDEX LAYER ─────────────────────────────────────────────────────────── */
-header, .info-bar, .filter-bar, main, #modal { position: relative; z-index: 2; }
+header, .info-bar, .filter-bar, main, .archive-section, #modal { position: relative; z-index: 2; }
 
 /* ── FILTER BAR ───────────────────────────────────────────────────────────── */
 .filter-bar {
@@ -749,4 +749,126 @@ body.page-robot main {
 /* ── TEXT HELPERS ──────────────────────────────────────────────────────────── */
 .text-dim {
   font-family: var(--serif); font-size: 11px; color: var(--text-dim);
+}
+
+/* ── S3 ARCHIVE SECTION ───────────────────────────────────────────────────── */
+.archive-section {
+  padding: 32px 28px 40px;
+  border-top: 1px solid var(--border);
+  margin-top: 8px;
+  background: #ffffff;
+}
+.archive-header {
+  margin-bottom: 16px;
+}
+.archive-title {
+  font-family: var(--serif); font-size: 15px; font-weight: 700;
+  letter-spacing: 0.04em; text-transform: uppercase; color: var(--text);
+}
+.archive-sub {
+  margin-top: 2px;
+}
+.archive-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 14px;
+  max-width: 1200px;
+}
+.archive-card {
+  background: #f0f0f0;
+  border: 1px solid #cccccc;
+  border-radius: 4px;
+  padding: 14px 16px;
+  display: flex; flex-direction: column; gap: 10px;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.archive-card:hover {
+  border-color: var(--ink);
+  box-shadow: 3px 3px 0 var(--ink-dim);
+}
+.archive-card-fig {
+  font-family: var(--mono); font-size: 9px; color: var(--text-dim);
+  letter-spacing: 0.1em;
+}
+.archive-card-id {
+  font-family: var(--mono); font-size: 13px; font-weight: 500;
+  color: var(--text); word-break: break-all;
+}
+.archive-card-actions {
+  margin-top: auto;
+}
+.archive-view-btn {
+  width: 100%;
+  padding: 6px 0;
+  border: 1px solid var(--ink);
+  border-radius: 3px;
+  background: #fce7f3;
+  font-family: var(--serif); font-size: 11px; font-weight: 600;
+  color: var(--ink); letter-spacing: 0.05em;
+  cursor: pointer; transition: background 0.12s, border-color 0.12s;
+}
+.archive-view-btn:hover {
+  background: var(--ink); color: var(--cream);
+}
+
+/* ── DATA CALENDAR ────────────────────────────────────────────────────────── */
+.data-calendar {
+  background: #ffffff;
+  border: 1px solid var(--border-hi);
+  border-radius: 4px;
+  padding: 12px;
+  margin-bottom: 12px;
+  width: fit-content;
+  min-width: 220px;
+}
+.cal-nav {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 8px;
+}
+.cal-nav-btn {
+  padding: 2px 8px; font-size: 16px; line-height: 1;
+}
+.cal-month-label {
+  font-family: var(--mono); font-size: 11px; font-weight: 500;
+  letter-spacing: 0.06em; color: var(--text);
+}
+.cal-weekdays {
+  display: grid; grid-template-columns: repeat(7, 1fr);
+  gap: 2px; margin-bottom: 4px;
+}
+.cal-weekdays span {
+  font-family: var(--mono); font-size: 9px; color: var(--text-dim);
+  text-align: center; letter-spacing: 0.05em;
+}
+.cal-grid {
+  display: grid; grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+}
+.cal-cell {
+  display: flex; flex-direction: column; align-items: center;
+  padding: 3px 2px; border-radius: 3px; min-height: 30px;
+  font-family: var(--mono); font-size: 10px; color: var(--text-dim);
+  position: relative;
+  background: #f5f5f5;
+}
+.cal-cell.cal-blank { pointer-events: none; background: transparent; }
+.cal-cell.has-data {
+  cursor: pointer; color: var(--text);
+  background: #fce7f3;
+  border: 1px solid var(--ink);
+}
+.cal-cell.has-data:hover {
+  background: var(--ink); color: var(--cream);
+}
+.cal-cell.has-data:hover .cal-dot { background: var(--cream); }
+.cal-cell.is-today .cal-day-num {
+  font-weight: 700; color: var(--ink);
+}
+.cal-day-num {
+  line-height: 1.4;
+}
+.cal-dot {
+  width: 4px; height: 4px; border-radius: 50%;
+  background: var(--ink); margin-top: 2px;
+  flex-shrink: 0;
 }

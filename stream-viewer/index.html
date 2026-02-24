@@ -143,6 +143,15 @@
   <div id="grid"></div>
 </main>
 
+<!-- S3 Archive section -->
+<section class="archive-section" id="archive-section" style="display:none;">
+  <div class="archive-header">
+    <div class="archive-title">S3 Archive</div>
+    <div class="archive-sub text-dim">Robots with recorded data — click to browse in View Mode</div>
+  </div>
+  <div class="archive-grid" id="archive-grid"></div>
+</section>
+
 
 <div id="modal">
   <div class="modal-box">
@@ -159,6 +168,7 @@
         <button class="proto-btn" data-proto="webrtc">WebRTC</button>
       </div>
       <div id="mjpeg-fields">
+        <div class="field-hint" style="margin-bottom:8px;">Streams default at 10 FPS. Best used as a sanity test for debugging hardware or video streams, but generally has higher latency. WebRTC is preferred for real-time observability.</div>
         <input id="modal-url" class="field-input" type="text" placeholder="http://100.107.96.29:8000/api/camera/stream" autocomplete="off">
         <div class="field-hint">Append ?fps=10&amp;quality=60 to limit bandwidth</div>
       </div>
@@ -416,6 +426,7 @@ function attachStreamHandlers(el,overlay,footer,stream){
     const img=document.createElement('img');img.alt=el.alt||'';img.loading='eager';
     el.replaceWith(img);
     const url=stream.url;
+    if(!url){setStatus('error',0);return;}
     img.onload=()=>{clearTimeout(retryTimer);clearInterval(countdown);retryDelay=2000;setStatus('live');};
     img.onerror=()=>{
       clearTimeout(retryTimer);clearInterval(countdown);
@@ -499,7 +510,35 @@ $('modal-add').addEventListener('click',submitModal);
 modal.addEventListener('click',e=>{if(e.target===modal)closeModal();});
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&modal.classList.contains('open'))closeModal();if(e.key==='Enter'&&modal.classList.contains('open')&&document.activeElement!==$('modal-cancel'))submitModal();});
 function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
-loadInitial().then(()=>render());
+loadInitial().then(()=>{render();loadArchiveRobots();});
+
+// ── S3 Archive ────────────────────────────────────────────────────────────
+async function loadArchiveRobots(){
+  const section=document.getElementById('archive-section');
+  const grid=document.getElementById('archive-grid');
+  try{
+    const res=await fetch(HEALTH_API+'/robots',{signal:AbortSignal.timeout(6000)});
+    if(!res.ok)return;
+    const robots=await res.json();
+    if(!Array.isArray(robots)||robots.length===0)return;
+    section.style.display='';
+    grid.innerHTML='';
+    robots.forEach(robotId=>{
+      const card=document.createElement('div');card.className='archive-card';
+      card.innerHTML=`
+        <div class="archive-card-fig">FIG.ARC</div>
+        <div class="archive-card-id">${escHtml(robotId)}</div>
+        <div class="archive-card-actions">
+          <button class="btn-primary archive-view-btn">View Archive</button>
+        </div>`;
+      card.querySelector('.archive-view-btn').addEventListener('click',()=>{
+        const u='robot.html?robot_id='+encodeURIComponent(robotId)+'&label='+encodeURIComponent(robotId)+'&mode=view';
+        window.open(u,'_blank');
+      });
+      grid.appendChild(card);
+    });
+  }catch(e){console.warn('Could not load archive robots:',e);}
+}
 
 // ── Show All dropdown ────────────────────────────────────────────────────
 const $showAllBtn=document.getElementById('btn-show-all');

@@ -453,6 +453,45 @@ async fn get_timeline(
 }
 
 // ---------------------------------------------------------------------------
+// Handlers — Active Dates
+// ---------------------------------------------------------------------------
+
+/// GET /robots/:robot_id/active-dates
+/// Returns a list of ISO 8601 dates (YYYY-MM-DD) for which the robot has segment data.
+async fn get_active_dates(
+    State(state): State<Arc<AppState>>,
+    AxumPath(robot_id): AxumPath<String>,
+) -> impl IntoResponse {
+    let db_dir = state.db_dir.clone();
+    let result = tokio::task::spawn_blocking(move || -> rusqlite::Result<Vec<String>> {
+        let conn = open_robot_db(&db_dir, &robot_id)?;
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT strftime('%Y-%m-%d', start_ms / 1000.0, 'unixepoch')
+             FROM segments
+             WHERE robot_id = ?1
+             ORDER BY 1 ASC",
+        )?;
+        let dates: rusqlite::Result<Vec<String>> = stmt
+            .query_map(params![robot_id], |row| row.get(0))?
+            .collect();
+        dates
+    })
+    .await;
+
+    match result {
+        Ok(Ok(dates)) => Json(serde_json::json!({ "dates": dates })).into_response(),
+        Ok(Err(e)) => {
+            error!(error = %e, "SQLite query failed");
+            (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
+        }
+        Err(e) => {
+            error!(error = %e, "spawn_blocking failed");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Handlers — Collections
 // ---------------------------------------------------------------------------
 
@@ -1097,7 +1136,27 @@ async fn browse_bucket(
     let mut grand_total_bytes: i64 = 0;
     let mut latest_epoch: i64 = 0;
 
-    for robot_prefix in &top_prefixes {
+    // Keys are structured as {family}/{robot_id}/camera/{date}/... so top_prefixes
+    // contains family prefixes (e.g. "reachy/"). We need one more level to get
+    // the actual robot_id prefixes (e.g. "reachy/reachy-002/").
+    let mut robot_prefixes: Vec<String> = Vec::new();
+    for family_prefix in &top_prefixes {
+        let sub_resp = client
+            .list_objects_v2()
+            .bucket(bucket)
+            .prefix(family_prefix)
+            .delimiter("/")
+            .send()
+            .await
+            .map_err(|e| format!("list robot prefixes under {family_prefix}: {e}"))?;
+        for p in sub_resp.common_prefixes() {
+            if let Some(s) = p.prefix() {
+                robot_prefixes.push(s.to_string());
+            }
+        }
+    }
+
+    for robot_prefix in &robot_prefixes {
         // For each robot, look under {robot}/camera/
         let camera_prefix = format!("{robot_prefix}camera/");
         let dates_resp = client
@@ -1153,10 +1212,12 @@ async fn browse_bucket(
             }
         }
 
+        // robot_prefix is "{family}/{robot_id}/"; extract the robot_id (last segment)
         let name = robot_prefix
-            .strip_prefix(root_prefix)
-            .unwrap_or(robot_prefix)
             .trim_end_matches('/')
+            .rsplit('/')
+            .next()
+            .unwrap_or(robot_prefix)
             .to_string();
         let recent_dates: Vec<String> = date_folders
             .iter()
@@ -1350,6 +1411,7 @@ async fn main() {
         .route("/robots/:robot_id/segments/:id/video", get(video_redirect))
         // Timeline
         .route("/robots/:robot_id/timeline", get(get_timeline))
+        .route("/robots/:robot_id/active-dates", get(get_active_dates))
         // Collections
         .route("/robots/:robot_id/collections", get(list_collections).post(create_collection))
         .route("/robots/:robot_id/collections/:id", get(get_collection).delete(delete_collection))
