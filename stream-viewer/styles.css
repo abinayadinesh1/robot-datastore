@@ -96,7 +96,7 @@ body {
 }
 
 /* ── Z-INDEX LAYER ─────────────────────────────────────────────────────────── */
-header, .info-bar, .filter-bar, main, .archive-section, #modal { position: relative; z-index: 2; }
+header, .info-bar, .filter-bar, main, #modal { position: relative; z-index: 2; }
 
 /* ── FILTER BAR ───────────────────────────────────────────────────────────── */
 .filter-bar {
@@ -751,64 +751,27 @@ body.page-robot main {
   font-family: var(--serif); font-size: 11px; color: var(--text-dim);
 }
 
-/* ── S3 ARCHIVE SECTION ───────────────────────────────────────────────────── */
-.archive-section {
-  padding: 32px 28px 40px;
-  border-top: 1px solid var(--border);
-  margin-top: 8px;
-  background: #ffffff;
+/* ── ARCHIVE DROPDOWN ROWS ────────────────────────────────────────────────── */
+.archive-robot-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 9px 14px;
+  cursor: pointer;
+  transition: background 0.1s;
 }
-.archive-header {
-  margin-bottom: 16px;
-}
-.archive-title {
-  font-family: var(--serif); font-size: 15px; font-weight: 700;
-  letter-spacing: 0.04em; text-transform: uppercase; color: var(--text);
-}
-.archive-sub {
-  margin-top: 2px;
-}
-.archive-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-  gap: 14px;
-  max-width: 1200px;
-}
-.archive-card {
-  background: #f0f0f0;
-  border: 1px solid #cccccc;
-  border-radius: 4px;
-  padding: 14px 16px;
-  display: flex; flex-direction: column; gap: 10px;
-  transition: border-color 0.15s, box-shadow 0.15s;
-}
-.archive-card:hover {
-  border-color: var(--ink);
-  box-shadow: 3px 3px 0 var(--ink-dim);
-}
-.archive-card-fig {
-  font-family: var(--mono); font-size: 9px; color: var(--text-dim);
-  letter-spacing: 0.1em;
-}
-.archive-card-id {
-  font-family: var(--mono); font-size: 13px; font-weight: 500;
-  color: var(--text); word-break: break-all;
-}
-.archive-card-actions {
-  margin-top: auto;
-}
-.archive-view-btn {
-  width: 100%;
-  padding: 6px 0;
-  border: 1px solid var(--ink);
-  border-radius: 3px;
+.archive-robot-item:hover {
   background: #fce7f3;
-  font-family: var(--serif); font-size: 11px; font-weight: 600;
-  color: var(--ink); letter-spacing: 0.05em;
-  cursor: pointer; transition: background 0.12s, border-color 0.12s;
 }
-.archive-view-btn:hover {
-  background: var(--ink); color: var(--cream);
+.archive-robot-id {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text);
+}
+.archive-robot-arrow {
+  font-size: 13px;
+  color: var(--ink);
+  opacity: 0.7;
 }
 
 /* ── DATA CALENDAR ────────────────────────────────────────────────────────── */

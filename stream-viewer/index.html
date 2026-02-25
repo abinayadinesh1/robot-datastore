@@ -122,6 +122,12 @@
       </label>
     </div>
   </div>
+  <div class="show-all-dropdown" style="position:relative;">
+    <button class="btn-ghost" id="btn-archives">View Archives &#x25BE;</button>
+    <div class="dropdown-menu" id="archives-menu" style="display:none;position:absolute;top:100%;left:0;z-index:200;min-width:240px;">
+      <div id="archives-list"><div class="dropdown-item text-dim" style="padding:10px 14px;">Loading…</div></div>
+    </div>
+  </div>
 </div>
 
 <main>
@@ -142,15 +148,6 @@
   </div>
   <div id="grid"></div>
 </main>
-
-<!-- S3 Archive section -->
-<section class="archive-section" id="archive-section" style="display:none;">
-  <div class="archive-header">
-    <div class="archive-title">S3 Archive</div>
-    <div class="archive-sub text-dim">Robots with recorded data — click to browse in View Mode</div>
-  </div>
-  <div class="archive-grid" id="archive-grid"></div>
-</section>
 
 
 <div id="modal">
@@ -514,30 +511,31 @@ loadInitial().then(()=>{render();loadArchiveRobots();});
 
 // ── S3 Archive ────────────────────────────────────────────────────────────
 async function loadArchiveRobots(){
-  const section=document.getElementById('archive-section');
-  const grid=document.getElementById('archive-grid');
+  const list=document.getElementById('archives-list');
   try{
     const res=await fetch(HEALTH_API+'/robots',{signal:AbortSignal.timeout(6000)});
-    if(!res.ok)return;
+    if(!res.ok){list.innerHTML='<div class="dropdown-item text-dim" style="padding:10px 14px;">No archives found</div>';return;}
     const robots=await res.json();
-    if(!Array.isArray(robots)||robots.length===0)return;
-    section.style.display='';
-    grid.innerHTML='';
+    if(!Array.isArray(robots)||robots.length===0){
+      list.innerHTML='<div class="dropdown-item text-dim" style="padding:10px 14px;">No archives found</div>';
+      return;
+    }
+    list.innerHTML='';
     robots.forEach(robotId=>{
-      const card=document.createElement('div');card.className='archive-card';
-      card.innerHTML=`
-        <div class="archive-card-fig">FIG.ARC</div>
-        <div class="archive-card-id">${escHtml(robotId)}</div>
-        <div class="archive-card-actions">
-          <button class="btn-primary archive-view-btn">View Archive</button>
-        </div>`;
-      card.querySelector('.archive-view-btn').addEventListener('click',()=>{
+      const item=document.createElement('div');
+      item.className='dropdown-item archive-robot-item';
+      item.innerHTML=`<span class="archive-robot-id">${escHtml(robotId)}</span><span class="archive-robot-arrow">&#x2192;</span>`;
+      item.addEventListener('click',()=>{
         const u='robot.html?robot_id='+encodeURIComponent(robotId)+'&label='+encodeURIComponent(robotId)+'&mode=view';
         window.open(u,'_blank');
+        document.getElementById('archives-menu').style.display='none';
       });
-      grid.appendChild(card);
+      list.appendChild(item);
     });
-  }catch(e){console.warn('Could not load archive robots:',e);}
+  }catch(e){
+    console.warn('Could not load archive robots:',e);
+    list.innerHTML='<div class="dropdown-item text-dim" style="padding:10px 14px;">Could not connect</div>';
+  }
 }
 
 // ── Show All dropdown ────────────────────────────────────────────────────
@@ -549,11 +547,18 @@ $showAllBtn.addEventListener('click',()=>{
   renderShowAll();
 });
 document.addEventListener('click',e=>{
-  if(!e.target.closest('.show-all-dropdown'))$showAllMenu.style.display='none';
-  if(!e.target.closest('.show-all-dropdown'))document.getElementById('modalities-menu').style.display='none';
+  if(!e.target.closest('.show-all-dropdown')){
+    $showAllMenu.style.display='none';
+    document.getElementById('modalities-menu').style.display='none';
+    document.getElementById('archives-menu').style.display='none';
+  }
 });
 document.getElementById('btn-modalities').addEventListener('click',()=>{
   const m=document.getElementById('modalities-menu');
+  m.style.display=m.style.display==='none'?'block':'none';
+});
+document.getElementById('btn-archives').addEventListener('click',()=>{
+  const m=document.getElementById('archives-menu');
   m.style.display=m.style.display==='none'?'block':'none';
 });
 function renderShowAll(){

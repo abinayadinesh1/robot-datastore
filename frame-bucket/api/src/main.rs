@@ -343,6 +343,71 @@ async fn video_redirect(
     }
 }
 
+/// GET /robots/:robot_id/segments/:id/image — proxy JPEG keyframe through API server.
+///
+/// Unlike /video (which issues a 302 redirect to a presigned RustFS URL), this handler
+/// fetches the bytes from RustFS on the server side and streams them back to the browser.
+/// This means the browser only needs to reach the API port, not the RustFS port directly.
+async fn image_proxy(
+    State(state): State<Arc<AppState>>,
+    AxumPath((robot_id, id)): AxumPath<(String, i64)>,
+) -> impl IntoResponse {
+    let db_dir = state.db_dir.clone();
+    let key_result = tokio::task::spawn_blocking(move || -> rusqlite::Result<Option<String>> {
+        let conn = open_robot_db(&db_dir, &robot_id)?;
+        let mut stmt =
+            conn.prepare("SELECT s3_key FROM segments WHERE id = ?1 AND robot_id = ?2")?;
+        let mut rows = stmt.query_map(params![id, robot_id], |row| row.get::<_, String>(0))?;
+        Ok(rows.next().transpose()?)
+    })
+    .await;
+
+    let s3_key = match key_result {
+        // H.264 idle segments have a synthetic key "idle:start/end" — no JPEG to serve.
+        Ok(Ok(Some(k))) if !k.starts_with("idle:") => k,
+        Ok(Ok(Some(_))) | Ok(Ok(None)) => return StatusCode::NOT_FOUND.into_response(),
+        Ok(Err(e)) => {
+            error!(error = %e, "SQLite query failed in image_proxy");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+        Err(e) => {
+            error!(error = %e, "spawn_blocking failed in image_proxy");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
+    match state
+        .s3_client
+        .get_object()
+        .bucket(&state.rustfs_bucket)
+        .key(s3_key.trim_start_matches('/'))
+        .send()
+        .await
+    {
+        Ok(output) => {
+            let content_type = output
+                .content_type()
+                .unwrap_or("image/jpeg")
+                .to_string();
+            match output.body.collect().await {
+                Ok(data) => (
+                    [(axum::http::header::CONTENT_TYPE, content_type)],
+                    data.into_bytes(),
+                )
+                    .into_response(),
+                Err(e) => {
+                    error!(error = %e, "failed to read image body from RustFS");
+                    StatusCode::INTERNAL_SERVER_ERROR.into_response()
+                }
+            }
+        }
+        Err(e) => {
+            error!(error = %e, s3_key, "RustFS get_object failed for image");
+            StatusCode::NOT_FOUND.into_response()
+        }
+    }
+}
+
 /// PATCH /robots/:robot_id/segments/:id — update labels
 async fn patch_labels(
     State(state): State<Arc<AppState>>,
@@ -1409,6 +1474,7 @@ async fn main() {
         .route("/robots/:robot_id/segments", get(list_segments))
         .route("/robots/:robot_id/segments/:id", get(get_segment).patch(patch_labels))
         .route("/robots/:robot_id/segments/:id/video", get(video_redirect))
+        .route("/robots/:robot_id/segments/:id/image", get(image_proxy))
         // Timeline
         .route("/robots/:robot_id/timeline", get(get_timeline))
         .route("/robots/:robot_id/active-dates", get(get_active_dates))

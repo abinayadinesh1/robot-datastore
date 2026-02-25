@@ -376,11 +376,13 @@ async function loadTimeline() {
 
     renderScrubber();
     $playbackOverlay.style.display = 'none';
-    $timeCurrent.textContent = msToTime(vs.rangeStartMs);
-    $timeTotal.textContent   = msToTime(vs.rangeEndMs);
+    const firstSeg = vs.segments[0];
+    const lastSeg  = vs.segments[vs.segments.length - 1];
+    $timeCurrent.textContent = msToTime(firstSeg.start_ms);
+    $timeTotal.textContent   = msToTime(lastSeg.end_ms);
 
     // Seek to first segment
-    seekToTimestamp(vs.segments[0].start_ms);
+    seekToTimestamp(firstSeg.start_ms);
   } catch (e) {
     $playbackOvText.textContent = 'Error loading timeline';
     console.error('Timeline load error:', e);
@@ -407,13 +409,25 @@ function renderScrubber() {
 
 // ── Scrubber drag ────────────────────────────────────────────────────────
 let scrubDragging = false;
+let pendingScrubTs = null;
 
 $scrubHandle.addEventListener('mousedown', (e) => { scrubDragging = true; e.preventDefault(); });
 document.addEventListener('mousemove', (e) => {
   if (!scrubDragging) return;
-  scrubToX(e.clientX);
+  // Update visual position only — defer the actual video seek to mouseup to prevent jitter.
+  const rect = $scrubTrack.getBoundingClientRect();
+  const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+  pendingScrubTs = vs.rangeStartMs + pct * (vs.rangeEndMs - vs.rangeStartMs);
+  $scrubHandle.style.left = (pct * 100) + '%';
+  $timeCurrent.textContent = msToTime(pendingScrubTs);
 });
-document.addEventListener('mouseup', () => { scrubDragging = false; });
+document.addEventListener('mouseup', () => {
+  if (scrubDragging && pendingScrubTs !== null) {
+    seekToTimestamp(pendingScrubTs);
+    pendingScrubTs = null;
+  }
+  scrubDragging = false;
+});
 
 $scrubTrack.addEventListener('click', (e) => {
   if (e.target.classList.contains('clip-handle')) return;
@@ -452,6 +466,13 @@ function seekToTimestamp(ts) {
   const seg = vs.segments[segIdx];
   vs.currentSegmentIdx = segIdx;
 
+  // Sync scrubber handle and time label for any seek, including idle segments.
+  const clampedTs = Math.max(seg.start_ms, Math.min(seg.end_ms, ts));
+  const totalMs = vs.rangeEndMs - vs.rangeStartMs;
+  const pct = (clampedTs - vs.rangeStartMs) / totalMs;
+  $scrubHandle.style.left = (Math.max(0, Math.min(1, pct)) * 100) + '%';
+  $timeCurrent.textContent = msToTime(clampedTs);
+
   if (seg.type === 'active') {
     showVideo(seg, ts);
   } else {
@@ -480,12 +501,29 @@ function showVideo(seg, ts) {
 }
 
 function showIdleImage(seg) {
-  const imageUrl = `${apiBase}/robots/${robotId}/segments/${seg.id}/video`;
   $video.style.display = 'none';
   $video.pause();
   $img.style.display = 'block';
-  $img.src = imageUrl;
+  $img.onerror = null;
+
+  // H.264 idle segments store a synthetic key ("idle:start/end") — no JPEG was uploaded.
+  // Show an overlay instead of a broken image icon.
+  if (!seg.s3_key || seg.s3_key.startsWith('idle:')) {
+    $img.src = '';
+    $playbackOvText.textContent = 'No snapshot (motion-quiet period)';
+    $playbackOverlay.style.display = 'flex';
+    return;
+  }
+
   $playbackOverlay.style.display = 'none';
+  const imageUrl = `${apiBase}/robots/${robotId}/segments/${seg.id}/image`;
+  $img.onerror = () => {
+    $img.onerror = null;
+    $img.src = '';
+    $playbackOvText.textContent = 'Could not load snapshot';
+    $playbackOverlay.style.display = 'flex';
+  };
+  $img.src = imageUrl;
 }
 
 // ── Playback engine ──────────────────────────────────────────────────────
@@ -519,10 +557,23 @@ function playFromCurrent() {
   const seg = vs.segments[vs.currentSegmentIdx];
 
   if (seg.type === 'active') {
-    showVideo(seg, seg.start_ms);
-    $video.play();
+    const wasSameSeg = $video.dataset.segId === String(seg.id);
+
+    if (!wasSameSeg) {
+      // New segment — load it and start from the beginning.
+      showVideo(seg, seg.start_ms);
+      $video.addEventListener('canplay', function onReady() {
+        $video.removeEventListener('canplay', onReady);
+        if (vs.isPlaying) {
+          $video.play().catch(e => { if (e.name !== 'AbortError') console.warn('play() error:', e); });
+        }
+      });
+    } else {
+      // Same segment already loaded — play from the current scrubbed position.
+      $video.play().catch(e => { if (e.name !== 'AbortError') console.warn('play() error:', e); });
+    }
+
     $video.onended = () => advanceToNextSegment(vs.currentSegmentIdx + 1);
-    // Update scrubber position during playback
     $video.ontimeupdate = () => {
       if (!vs.isPlaying) return;
       const currentTs = seg.start_ms + $video.currentTime * 1000;
@@ -530,10 +581,8 @@ function playFromCurrent() {
     };
   } else {
     showIdleImage(seg);
-    // Time-compress idle: max(0.5s, min(3s, realDuration/60))
-    const realDur = (seg.end_ms - seg.start_ms) / 1000;
-    const displayDur = Math.max(0.5, Math.min(3, realDur / 60));
-    playbackTimer = setTimeout(() => advanceToNextSegment(vs.currentSegmentIdx + 1), displayDur * 1000);
+    updateScrubberPosition(seg.start_ms);
+    playbackTimer = setTimeout(() => advanceToNextSegment(vs.currentSegmentIdx + 1), 750);
   }
 }
 
@@ -573,8 +622,22 @@ function playClipRange() {
 
   if (seg.type === 'active') {
     const seekTs = Math.max(startMs, seg.start_ms);
+    const wasSameSeg = $video.dataset.segId === String(seg.id);
     showVideo(seg, seekTs);
-    $video.play();
+
+    const doPlay = () => {
+      $video.play().catch(e => { if (e.name !== 'AbortError') console.warn('play() error:', e); });
+    };
+
+    if (!wasSameSeg) {
+      $video.addEventListener('canplay', function onReady() {
+        $video.removeEventListener('canplay', onReady);
+        if (vs.isPlaying) doPlay();
+      });
+    } else {
+      doPlay();
+    }
+
     $video.ontimeupdate = () => {
       if (!vs.isPlaying) return;
       const currentTs = seg.start_ms + $video.currentTime * 1000;
@@ -588,9 +651,8 @@ function playClipRange() {
     $video.onended = () => advanceToNextSegment(vs.currentSegmentIdx + 1);
   } else {
     showIdleImage(seg);
-    const realDur = (Math.min(seg.end_ms, endMs) - Math.max(seg.start_ms, startMs)) / 1000;
-    const displayDur = Math.max(0.5, Math.min(3, realDur / 60));
-    playbackTimer = setTimeout(() => advanceToNextSegment(vs.currentSegmentIdx + 1), displayDur * 1000);
+    updateScrubberPosition(Math.max(seg.start_ms, startMs));
+    playbackTimer = setTimeout(() => advanceToNextSegment(vs.currentSegmentIdx + 1), 750);
   }
 }
 

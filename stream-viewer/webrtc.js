@@ -20,9 +20,19 @@ function connectWebRTC(videoEl, signalingUrl, peerId, callbacks) {
 
   function cleanup() {
     closed = true;
+    document.removeEventListener('visibilitychange', onVisibilityChange);
     if (pc) { try { pc.close(); } catch (_) {} pc = null; }
     if (ws) { try { ws.close(); } catch (_) {} ws = null; }
   }
+
+  // When the user switches back to this tab, the browser's video decoder
+  // pipeline may have paused. Calling play() restarts it immediately.
+  function onVisibilityChange() {
+    if (!document.hidden && videoEl && videoEl.srcObject && videoEl.paused) {
+      videoEl.play().catch(() => {});
+    }
+  }
+  document.addEventListener('visibilitychange', onVisibilityChange);
 
   function connect() {
     if (closed) return;
@@ -76,6 +86,12 @@ function connectWebRTC(videoEl, signalingUrl, peerId, callbacks) {
         pc.ontrack = (e) => {
           if (e.streams && e.streams[0]) {
             videoEl.srcObject = e.streams[0];
+            // Request minimal playout buffering from the browser (Chrome 123+).
+            // The default jitter buffer can grow to 100ms+ under jitter; on LAN/Tailscale
+            // jitter is negligible so 0 is safe.
+            if (e.receiver && 'jitterBufferTarget' in e.receiver) {
+              e.receiver.jitterBufferTarget = 0;
+            }
             if (callbacks.onConnected) callbacks.onConnected();
           }
         };
@@ -98,6 +114,19 @@ function connectWebRTC(videoEl, signalingUrl, peerId, callbacks) {
           // 'disconnected' is transient — ICE may self-heal. Only treat 'failed' as terminal.
           if (pc.connectionState === 'failed') {
             if (callbacks.onDisconnected) callbacks.onDisconnected();
+          }
+        };
+
+        // When ICE goes disconnected (e.g. tab was backgrounded and keepalives
+        // missed their window), kick a new ICE gathering round immediately
+        // rather than waiting up to 30s for the consent-check timeout.
+        pc.oniceconnectionstatechange = () => {
+          if (pc.iceConnectionState === 'disconnected') {
+            setTimeout(() => {
+              if (pc && pc.iceConnectionState === 'disconnected') {
+                pc.restartIce();
+              }
+            }, 1500);
           }
         };
       }
