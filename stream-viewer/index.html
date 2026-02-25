@@ -149,11 +149,12 @@
   <div id="grid"></div>
 </main>
 
+<div class="toast-container" id="toast-container"></div>
 
 <div id="modal">
   <div class="modal-box">
-    <div class="modal-fig">FIG. NEW</div>
-    <div class="modal-title">Add Feed Source</div>
+    <div class="modal-fig" id="modal-fig">FIG. NEW</div>
+    <div class="modal-title" id="modal-title">Add Feed Source</div>
     <div class="field">
       <label class="field-label" for="modal-robot-id">Robot ID</label>
       <input id="modal-robot-id" class="field-input" type="text" placeholder="e.g. reachy-003" autocomplete="off">
@@ -175,10 +176,8 @@
         <div class="field-hint">Append ?fps=10&amp;quality=60 to limit bandwidth</div>
       </div>
       <div id="webrtc-fields" style="display:none;">
-        <input id="modal-webrtc-url" class="field-input" type="text" placeholder="ws://100.107.96.29:8443" autocomplete="off">
-        <div class="field-hint">WebSocket signalling endpoint</div>
-        <input id="modal-peer-id" class="field-input" type="text" placeholder="e.g. reachymini" autocomplete="off" style="margin-top:8px;">
-        <div class="field-hint">Peer ID for WebRTC negotiation</div>
+        <input id="modal-webrtc-url" class="field-input" type="text" placeholder="http://100.107.96.29:8000/api/webrtc/offer" autocomplete="off">
+        <div class="field-hint">HTTP endpoint that accepts SDP offer and returns SDP answer</div>
       </div>
     </div>
     <div class="field" style="margin-top:4px;">
@@ -201,6 +200,12 @@ const state={streams:[],nextId:1};
 const $=id=>document.getElementById(id);
 let MGMT_BASE='http://100.81.222.59:8081';
 
+function showToast(msg,type='warn',duration=5000){
+  const el=document.createElement('div');el.className='toast'+(type?' '+type:'');el.textContent=msg;
+  $('toast-container').appendChild(el);
+  setTimeout(()=>{el.style.animation='toastOut 0.3s ease-in forwards';setTimeout(()=>el.remove(),300);},duration);
+}
+
 function save(){localStorage.setItem(STORAGE_KEY,JSON.stringify(state.streams));localStorage.setItem(NEXT_ID_KEY,state.nextId);}
 async function loadInitial(){
   const saved=localStorage.getItem(STORAGE_KEY);
@@ -220,10 +225,9 @@ async function loadInitial(){
     try{
       const res=await fetch(MGMT_BASE+'/streams');const data=await res.json();
       if(Array.isArray(data.streams)){data.streams.forEach(s=>{
-        const o={id:state.nextId++,label:s.label||s.robot_id||'Camera',robot_id:s.robot_id||'unknown'};
+        const o={id:state.nextId++,label:s.label||s.robot_id||'Camera',robot_id:s.robot_id||'unknown',registered:true};
         if(s.stream_url)o.url=s.stream_url;
         if(s.webrtc_url)o.webrtc_url=s.webrtc_url;
-        if(s.peer_id)o.peer_id=s.peer_id;
         state.streams.push(o);
       });save();}
     }catch(e){console.warn('Failed to fetch streams from API',e);}
@@ -353,6 +357,12 @@ function createTile(stream,idx){
       <span class="tile-label" title="Click to rename">${escHtml(stream.label)}</span>
     </div>
     <div class="tile-actions">
+      <button class="tile-btn" data-action="edit" title="Edit">
+        <svg viewBox="0 0 20 20" fill="currentColor"><path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z"/></svg>
+      </button>
+      <button class="tile-btn" data-action="duplicate" title="Duplicate">
+        <svg viewBox="0 0 20 20" fill="currentColor"><path d="M7 2a2 2 0 00-2 2v1H4a2 2 0 00-2 2v9a2 2 0 002 2h9a2 2 0 002-2v-1h1a2 2 0 002-2V4a2 2 0 00-2-2H7zm0 2h9v9h-1V7a2 2 0 00-2-2H7V4zm-3 3h9v9H4V7z"/></svg>
+      </button>
       <button class="tile-btn" data-action="retry" title="Retry">
         <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clip-rule="evenodd"/></svg>
       </button>
@@ -402,7 +412,7 @@ function attachStreamHandlers(el,overlay,footer,stream){
   }
 
   // Try WebRTC first, fall back to MJPEG <img>
-  if(stream.webrtc_url && stream.peer_id && el.tagName==='VIDEO'){
+  if(stream.webrtc_url && el.tagName==='VIDEO'){
     setStatus('connecting');
     let webrtcTimeout=setTimeout(()=>{
       console.warn('WebRTC timeout, falling back to MJPEG');
@@ -410,20 +420,21 @@ function attachStreamHandlers(el,overlay,footer,stream){
       fallbackToMjpeg(true);
     },10000);
 
-    webrtcHandle=connectWebRTC(el,stream.webrtc_url,stream.peer_id,{
+    const webrtcCallbacks={
       onConnected:()=>{clearTimeout(webrtcTimeout);retryDelay=2000;setStatus('live');},
       onDisconnected:()=>{
         clearTimeout(webrtcTimeout);
         let secs=Math.round(retryDelay/1000);setStatus('error',secs);
         countdown=setInterval(()=>{secs--;const t=overlay.querySelector('.status-text');if(t)t.textContent=secs>0?`Retry in ${secs}s`:'Reconnecting';if(lbl)lbl.textContent=secs>0?`retry ${secs}s`:'reconnecting';},1000);
-        retryTimer=setTimeout(()=>{clearInterval(countdown);setStatus('connecting');if(webrtcHandle)webrtcHandle.close();webrtcHandle=connectWebRTC(el,stream.webrtc_url,stream.peer_id,arguments[0]);retryDelay=Math.min(retryDelay*2,30000);},retryDelay);
+        retryTimer=setTimeout(()=>{clearInterval(countdown);setStatus('connecting');if(webrtcHandle)webrtcHandle.close();webrtcHandle=connectWebRTC(el,stream.webrtc_url,webrtcCallbacks);retryDelay=Math.min(retryDelay*2,30000);},retryDelay);
       },
       onError:(err)=>{
         clearTimeout(webrtcTimeout);
         console.warn('WebRTC failed, falling back to MJPEG:',err);
         fallbackToMjpeg(true);
       }
-    });
+    };
+    webrtcHandle=connectWebRTC(el,stream.webrtc_url,webrtcCallbacks);
   } else {
     fallbackToMjpeg();
   }
@@ -459,32 +470,37 @@ function attachTileHandlers(tile,header,streamId){
     const btn=e.target.closest('[data-action]');if(!btn)return;
     if(btn.dataset.action==='remove')removeStream(streamId);
     if(btn.dataset.action==='retry')retryStream(streamId);
+    if(btn.dataset.action==='edit')openEditModal(streamId);
+    if(btn.dataset.action==='duplicate')duplicateStream(streamId);
   });
   tile.querySelector('.tile-body').addEventListener('dblclick',()=>{
     const s=state.streams.find(s=>s.id===streamId);
-    if(s){let u='robot.html?label='+encodeURIComponent(s.label)+'&url='+encodeURIComponent(s.url)+'&robot_id='+encodeURIComponent(s.robot_id||'reachy-001');if(s.webrtc_url)u+='&webrtc_url='+encodeURIComponent(s.webrtc_url);if(s.peer_id)u+='&peer_id='+encodeURIComponent(s.peer_id);window.open(u,'_blank');}
+    if(s){let u='robot.html?label='+encodeURIComponent(s.label)+'&url='+encodeURIComponent(s.url)+'&robot_id='+encodeURIComponent(s.robot_id||'reachy-001');if(s.webrtc_url)u+='&webrtc_url='+encodeURIComponent(s.webrtc_url);window.open(u,'_blank');}
   });
 }
 
 async function addStream(obj,registerPipeline){
-  state.streams.push({id:state.nextId++,...obj});save();render();
+  state.streams.push({id:state.nextId++,...obj,registered:!!registerPipeline});save();render();
   if(!registerPipeline)return;
   // POST to management API so the pipeline starts ingesting
   const body={robot_id:obj.robot_id||'unknown',stream_url:obj.url||'',mode:'mjpeg',fps:10,quality:80};
   if(obj.label)body.label=obj.label;
   if(obj.webrtc_url){body.webrtc_url=obj.webrtc_url;body.mode='h264';}
-  if(obj.peer_id)body.peer_id=obj.peer_id;
   try{
     const res=await fetch(MGMT_BASE+'/streams',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-    if(!res.ok){const msg=await res.text();console.error('POST /streams failed:',res.status,msg);}
-    else{console.log('Pipeline registered for',obj.robot_id);}
-  }catch(e){console.error('POST /streams error:',e);}
+    if(!res.ok){const msg=await res.text();console.error('POST /streams failed:',res.status,msg);showToast('Pipeline rejected stream: '+msg,'error');}
+    else{console.log('Pipeline registered for',obj.robot_id);showToast('Pipeline registered: '+obj.robot_id,'');}
+  }catch(e){
+    console.error('POST /streams error:',e);
+    showToast("Added in 'View Only' because pipeline unreachable \u2014 are you sure it's running?",'warn',7000);
+  }
 }
 async function removeStream(id){
   const s=state.streams.find(s=>s.id===id);
   const robotId=s&&s.robot_id;
+  const wasRegistered=s&&s.registered;
   state.streams=state.streams.filter(s=>s.id!==id);save();render();
-  if(!robotId)return;
+  if(!robotId||!wasRegistered)return;
   // DELETE from management API to stop the pipeline
   try{
     const res=await fetch(MGMT_BASE+'/streams/'+encodeURIComponent(robotId),{method:'DELETE'});
@@ -494,6 +510,44 @@ async function removeStream(id){
   }catch(e){console.error('DELETE /streams error:',e);}
 }
 function retryStream(id){const s=state.streams.find(s=>s.id===id);if(!s)return;const tile=grid.querySelector(`[data-id="${id}"]`);if(tile)tile.remove();const idx=state.streams.indexOf(s);grid.appendChild(createTile(s,idx));}
+
+function duplicateStream(id){
+  const s=state.streams.find(s=>s.id===id);if(!s)return;
+  const copy={...s,id:state.nextId++,label:(s.label||'Camera')+' (copy)',robot_id:s.robot_id?(s.robot_id+'-copy'):undefined,registered:false};
+  state.streams.push(copy);save();render();
+  showToast('Duplicated as view-only \u2014 edit to register with pipeline','');
+}
+
+let editingStreamId=null;
+function openEditModal(id){
+  const s=state.streams.find(s=>s.id===id);if(!s)return;
+  editingStreamId=id;
+  $('modal-robot-id').value=s.robot_id||'';
+  $('modal-label').value=s.label||'';
+  $('modal-pipeline').checked=!!s.registered;
+  if(s.webrtc_url){
+    modalProto='webrtc';
+    $('modal-webrtc-url').value=s.webrtc_url||'';
+    $('modal-url').value=s.url||'';
+  }else{
+    modalProto='mjpeg';
+    $('modal-url').value=s.url||'';
+    $('modal-webrtc-url').value='';
+  }
+  document.querySelectorAll('.proto-btn').forEach(b=>b.classList.toggle('active',b.dataset.proto===modalProto));
+  $('mjpeg-fields').style.display=modalProto==='mjpeg'?'':'none';
+  $('webrtc-fields').style.display=modalProto==='webrtc'?'':'none';
+  $('modal-fig').textContent='FIG. EDIT';
+  $('modal-title').textContent='Edit Feed Source';
+  $('modal-add').textContent='Save';
+  modal.classList.add('open');$('modal-robot-id').focus();
+}
+function resetModalMode(){
+  editingStreamId=null;
+  $('modal-fig').textContent='FIG. NEW';
+  $('modal-title').textContent='Add Feed Source';
+  $('modal-add').textContent='Add Feed';
+}
 
 const grid=$('grid');
 function render(){
@@ -516,30 +570,70 @@ document.querySelectorAll('.proto-btn').forEach(btn=>{
   });
 });
 function openModal(){
-  $('modal-robot-id').value='';$('modal-label').value='';$('modal-url').value='';$('modal-webrtc-url').value='';$('modal-peer-id').value='';
+  resetModalMode();
+  $('modal-robot-id').value='';$('modal-label').value='';$('modal-url').value='';$('modal-webrtc-url').value='';
   $('modal-pipeline').checked=true;
   modalProto='mjpeg';
   document.querySelectorAll('.proto-btn').forEach(b=>b.classList.toggle('active',b.dataset.proto==='mjpeg'));
   $('mjpeg-fields').style.display='';$('webrtc-fields').style.display='none';
   modal.classList.add('open');$('modal-robot-id').focus();
 }
-function closeModal(){modal.classList.remove('open');}
-function submitModal(){
+function closeModal(){modal.classList.remove('open');resetModalMode();}
+
+function collectModalFields(){
   const rid=$('modal-robot-id').value.trim();
   const l=$('modal-label').value.trim()||'Camera';
   const reg=$('modal-pipeline').checked;
-  if(reg&&!rid){$('modal-robot-id').focus();return;}
+  if(reg&&!rid){$('modal-robot-id').focus();return null;}
+  let obj;
   if(modalProto==='mjpeg'){
     const u=$('modal-url').value.trim()||'http://100.107.96.29:8000/api/camera/stream';
-    if(!u){$('modal-url').focus();return;}
-    addStream({label:l,url:u,robot_id:rid||undefined},reg);
+    if(!u){$('modal-url').focus();return null;}
+    obj={label:l,url:u,robot_id:rid||undefined};
   }else{
-    const wu=$('modal-webrtc-url').value.trim()||'ws://100.107.96.29:8443';
-    const pid=$('modal-peer-id').value.trim();
-    if(!wu){$('modal-webrtc-url').focus();return;}
-    addStream({label:l,webrtc_url:wu,peer_id:pid,robot_id:rid||undefined},reg);
+    const wu=$('modal-webrtc-url').value.trim()||'http://100.107.96.29:8000/api/webrtc/offer';
+    if(!wu){$('modal-webrtc-url').focus();return null;}
+    obj={label:l,webrtc_url:wu,robot_id:rid||undefined};
   }
+  return{obj,reg};
+}
+
+function submitModal(){
+  if(editingStreamId!==null)return submitEditModal();
+  const r=collectModalFields();if(!r)return;
+  addStream(r.obj,r.reg);
   closeModal();
+}
+
+async function submitEditModal(){
+  const r=collectModalFields();if(!r)return;
+  const s=state.streams.find(s=>s.id===editingStreamId);if(!s)return;
+  const oldRobotId=s.robot_id;
+  const wasRegistered=s.registered;
+  // Update local state
+  Object.assign(s,r.obj);
+  s.registered=r.reg;
+  save();
+  // Re-render the tile
+  const tile=grid.querySelector(`[data-id="${editingStreamId}"]`);
+  if(tile)tile.remove();
+  const idx=state.streams.indexOf(s);
+  grid.appendChild(createTile(s,idx));
+  closeModal();
+  // Sync with pipeline: remove old if it was registered, add new if requested
+  if(wasRegistered&&oldRobotId){
+    try{await fetch(MGMT_BASE+'/streams/'+encodeURIComponent(oldRobotId),{method:'DELETE'});}catch(_){}
+  }
+  if(r.reg&&r.obj.robot_id){
+    const body={robot_id:r.obj.robot_id,stream_url:r.obj.url||'',mode:'mjpeg',fps:10,quality:80};
+    if(r.obj.label)body.label=r.obj.label;
+    if(r.obj.webrtc_url){body.webrtc_url=r.obj.webrtc_url;body.mode='h264';}
+    try{
+      const res=await fetch(MGMT_BASE+'/streams',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+      if(!res.ok){showToast('Pipeline rejected update: '+(await res.text()),'error');}
+      else{showToast('Pipeline updated: '+r.obj.robot_id,'');}
+    }catch(e){showToast("Pipeline unreachable \u2014 saved locally as view-only",'warn',7000);}
+  }
 }
 $('add-btn').addEventListener('click',openModal);
 $('modal-cancel').addEventListener('click',closeModal);

@@ -582,6 +582,27 @@ body.page-robot main {
   background: var(--amber); transition: background 0.3s;
 }
 
+/* ── TOAST ─────────────────────────────────────────────────────────────────── */
+.toast-container {
+  position: fixed; bottom: 24px; right: 24px; z-index: 9999;
+  display: flex; flex-direction: column; gap: 8px; pointer-events: none;
+}
+.toast {
+  pointer-events: auto;
+  font-family: 'IBM Plex Mono', monospace; font-size: 11px;
+  letter-spacing: 0.04em; line-height: 1.5;
+  padding: 10px 16px; border-radius: 3px;
+  border: 1px solid var(--border-hi);
+  background: var(--surface2); color: var(--text);
+  box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+  animation: toastIn 0.3s ease-out;
+  max-width: 380px;
+}
+.toast.warn { border-color: var(--amber); }
+.toast.error { border-color: #ff3355; }
+@keyframes toastIn { from { opacity:0; transform: translateY(12px); } to { opacity:1; transform: translateY(0); } }
+@keyframes toastOut { from { opacity:1; } to { opacity:0; transform: translateY(8px); } }
+
 /* ── SCROLLBAR ─────────────────────────────────────────────────────────────── */
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }

@@ -176,7 +176,6 @@ function getParam(name){
 const label     = getParam('label') || 'Robot Camera';
 const url       = getParam('url');
 const webrtcUrl = getParam('webrtc_url');
-const peerId    = getParam('peer_id') || 'reachymini';
 const robotId   = getParam('robot_id') || 'reachy-001';
 const initMode  = getParam('mode') || 'live';
 let apiBase     = 'http://100.81.222.59:8080'; // fallback; overridden by sources.json
@@ -334,7 +333,7 @@ if(!url && !webrtcUrl){
       if(url) startMjpegFallback();
     },10000);
 
-    connectWebRTC(videoEl,webrtcUrl,peerId,{
+    connectWebRTC(videoEl,webrtcUrl,{
       onConnected:()=>{clearTimeout(webrtcTimeout);retryDelay=2000;setLive();},
       onDisconnected:()=>{clearTimeout(webrtcTimeout);if(url)startMjpegFallback();},
       onError:(err)=>{clearTimeout(webrtcTimeout);console.warn('WebRTC error:',err);if(url)startMjpegFallback();}
