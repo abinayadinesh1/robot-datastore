@@ -155,6 +155,11 @@
     <div class="modal-fig">FIG. NEW</div>
     <div class="modal-title">Add Feed Source</div>
     <div class="field">
+      <label class="field-label" for="modal-robot-id">Robot ID</label>
+      <input id="modal-robot-id" class="field-input" type="text" placeholder="e.g. reachy-003" autocomplete="off">
+      <div class="field-hint">Unique identifier used by the pipeline and storage layer</div>
+    </div>
+    <div class="field">
       <label class="field-label" for="modal-label">Designation</label>
       <input id="modal-label" class="field-input" type="text" placeholder="e.g. Reachy Mini — Front Camera" autocomplete="off">
     </div>
@@ -176,6 +181,12 @@
         <div class="field-hint">Peer ID for WebRTC negotiation</div>
       </div>
     </div>
+    <div class="field" style="margin-top:4px;">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim);">
+        <input id="modal-pipeline" type="checkbox" checked> Register with pipeline
+      </label>
+      <div class="field-hint">When checked, the feed is also sent to the frame-bucket pipeline for recording &amp; storage. Uncheck to add a view-only source.</div>
+    </div>
     <div class="modal-actions">
       <button class="btn-ghost" id="modal-cancel">Cancel</button>
       <button class="btn-primary" id="modal-add">Add Feed</button>
@@ -188,6 +199,7 @@ const STORAGE_KEY='sv-sketch.streams', NEXT_ID_KEY='sv-sketch.nextId';
 const DEFAULT_URL='http://100.107.96.29:8000/api/camera/stream';
 const state={streams:[],nextId:1};
 const $=id=>document.getElementById(id);
+let MGMT_BASE='http://100.81.222.59:8081';
 
 function save(){localStorage.setItem(STORAGE_KEY,JSON.stringify(state.streams));localStorage.setItem(NEXT_ID_KEY,state.nextId);}
 async function loadInitial(){
@@ -196,18 +208,17 @@ async function loadInitial(){
 
   // Bootstrap: get api_url and mgmt_url from sources.json
   let apiBase=HEALTH_API;
-  let mgmtBase='http://100.81.222.59:8081';
   try{
     const res=await fetch('sources.json');const data=await res.json();
     if(data.api_url) apiBase=data.api_url;
-    if(data.mgmt_url) mgmtBase=data.mgmt_url;
+    if(data.mgmt_url) MGMT_BASE=data.mgmt_url;
   }catch(_){}
   initHealthPolling(apiBase);
 
   // Fetch streams from pipeline management API
   if(!saved){
     try{
-      const res=await fetch(mgmtBase+'/streams');const data=await res.json();
+      const res=await fetch(MGMT_BASE+'/streams');const data=await res.json();
       if(Array.isArray(data.streams)){data.streams.forEach(s=>{
         const o={id:state.nextId++,label:s.label||s.robot_id||'Camera',robot_id:s.robot_id||'unknown'};
         if(s.stream_url)o.url=s.stream_url;
@@ -455,8 +466,33 @@ function attachTileHandlers(tile,header,streamId){
   });
 }
 
-function addStream(obj){state.streams.push({id:state.nextId++,...obj});save();render();}
-function removeStream(id){state.streams=state.streams.filter(s=>s.id!==id);save();render();}
+async function addStream(obj,registerPipeline){
+  state.streams.push({id:state.nextId++,...obj});save();render();
+  if(!registerPipeline)return;
+  // POST to management API so the pipeline starts ingesting
+  const body={robot_id:obj.robot_id||'unknown',stream_url:obj.url||'',mode:'mjpeg',fps:10,quality:80};
+  if(obj.label)body.label=obj.label;
+  if(obj.webrtc_url){body.webrtc_url=obj.webrtc_url;body.mode='h264';}
+  if(obj.peer_id)body.peer_id=obj.peer_id;
+  try{
+    const res=await fetch(MGMT_BASE+'/streams',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    if(!res.ok){const msg=await res.text();console.error('POST /streams failed:',res.status,msg);}
+    else{console.log('Pipeline registered for',obj.robot_id);}
+  }catch(e){console.error('POST /streams error:',e);}
+}
+async function removeStream(id){
+  const s=state.streams.find(s=>s.id===id);
+  const robotId=s&&s.robot_id;
+  state.streams=state.streams.filter(s=>s.id!==id);save();render();
+  if(!robotId)return;
+  // DELETE from management API to stop the pipeline
+  try{
+    const res=await fetch(MGMT_BASE+'/streams/'+encodeURIComponent(robotId),{method:'DELETE'});
+    if(res.status===204)console.log('Pipeline removed for',robotId);
+    else if(res.status===404)console.log('Pipeline was not running for',robotId);
+    else console.warn('DELETE /streams failed:',res.status,await res.text());
+  }catch(e){console.error('DELETE /streams error:',e);}
+}
 function retryStream(id){const s=state.streams.find(s=>s.id===id);if(!s)return;const tile=grid.querySelector(`[data-id="${id}"]`);if(tile)tile.remove();const idx=state.streams.indexOf(s);grid.appendChild(createTile(s,idx));}
 
 const grid=$('grid');
@@ -480,24 +516,28 @@ document.querySelectorAll('.proto-btn').forEach(btn=>{
   });
 });
 function openModal(){
-  $('modal-label').value='';$('modal-url').value='';$('modal-webrtc-url').value='';$('modal-peer-id').value='';
+  $('modal-robot-id').value='';$('modal-label').value='';$('modal-url').value='';$('modal-webrtc-url').value='';$('modal-peer-id').value='';
+  $('modal-pipeline').checked=true;
   modalProto='mjpeg';
   document.querySelectorAll('.proto-btn').forEach(b=>b.classList.toggle('active',b.dataset.proto==='mjpeg'));
   $('mjpeg-fields').style.display='';$('webrtc-fields').style.display='none';
-  modal.classList.add('open');$('modal-label').focus();
+  modal.classList.add('open');$('modal-robot-id').focus();
 }
 function closeModal(){modal.classList.remove('open');}
 function submitModal(){
+  const rid=$('modal-robot-id').value.trim();
   const l=$('modal-label').value.trim()||'Camera';
+  const reg=$('modal-pipeline').checked;
+  if(reg&&!rid){$('modal-robot-id').focus();return;}
   if(modalProto==='mjpeg'){
     const u=$('modal-url').value.trim()||'http://100.107.96.29:8000/api/camera/stream';
     if(!u){$('modal-url').focus();return;}
-    addStream({label:l,url:u});
+    addStream({label:l,url:u,robot_id:rid||undefined},reg);
   }else{
     const wu=$('modal-webrtc-url').value.trim()||'ws://100.107.96.29:8443';
     const pid=$('modal-peer-id').value.trim();
     if(!wu){$('modal-webrtc-url').focus();return;}
-    addStream({label:l,webrtc_url:wu,peer_id:pid});
+    addStream({label:l,webrtc_url:wu,peer_id:pid,robot_id:rid||undefined},reg);
   }
   closeModal();
 }
