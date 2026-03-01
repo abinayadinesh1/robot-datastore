@@ -119,12 +119,11 @@ fn scan_nals(access_unit: &[u8]) -> Vec<(u8, Vec<u8>)> {
             len
         };
         let nal_header = access_unit[start];
-        let nal_type = nal_header & 0x1F;
-        // Payload is everything after the NAL header byte
+        // Return the full NAL header byte so callers can extract nal_ref_idc
         if start + 1 < end {
-            nals.push((nal_type, access_unit[start + 1..end].to_vec()));
+            nals.push((nal_header, access_unit[start + 1..end].to_vec()));
         } else {
-            nals.push((nal_type, Vec::new()));
+            nals.push((nal_header, Vec::new()));
         }
     }
 
@@ -151,6 +150,8 @@ struct SpsInfo {
 struct PpsInfo {
     /// 0 = CAVLC, 1 = CABAC
     entropy_coding_mode_flag: u8,
+    /// Whether deblocking filter control fields appear in slice headers
+    deblocking_filter_control_present_flag: u8,
 }
 
 // ---------------------------------------------------------------------------
@@ -260,7 +261,8 @@ fn parse_sps(raw_payload: &[u8]) -> Option<SpsInfo> {
 // PPS parser (minimal)
 // ---------------------------------------------------------------------------
 
-/// Parse a PPS NAL payload to extract entropy_coding_mode_flag.
+/// Parse a PPS NAL payload to extract entropy_coding_mode_flag and
+/// deblocking_filter_control_present_flag.
 fn parse_pps(raw_payload: &[u8]) -> Option<PpsInfo> {
     let payload = strip_emulation_prevention(raw_payload);
     let mut bit_pos: usize = 0;
@@ -274,12 +276,66 @@ fn parse_pps(raw_payload: &[u8]) -> Option<PpsInfo> {
     bit_pos += bits;
 
     // entropy_coding_mode_flag (1 bit)
-    let (flag, _) = read_bits(&payload, bit_pos, 1)?;
+    let (entropy_flag, bits) = read_bits(&payload, bit_pos, 1)?;
+    bit_pos += bits;
 
-    debug!(entropy_coding_mode_flag = flag, "parsed PPS");
+    // bottom_field_pic_order_in_frame_present_flag (1 bit)
+    let (_, bits) = read_bits(&payload, bit_pos, 1)?;
+    bit_pos += bits;
+
+    // num_slice_groups_minus1 (ue)
+    let (num_slice_groups_minus1, bits) = read_exp_golomb(&payload, bit_pos)?;
+    bit_pos += bits;
+
+    if num_slice_groups_minus1 > 0 {
+        // Slice group map parsing is complex; bail out for non-trivial cases
+        debug!(num_slice_groups_minus1, "PPS has slice groups — skipping deep parse");
+        return Some(PpsInfo {
+            entropy_coding_mode_flag: entropy_flag as u8,
+            deblocking_filter_control_present_flag: 1, // conservative default
+        });
+    }
+
+    // num_ref_idx_l0_default_active_minus1 (ue)
+    let (_, bits) = read_exp_golomb(&payload, bit_pos)?;
+    bit_pos += bits;
+
+    // num_ref_idx_l1_default_active_minus1 (ue)
+    let (_, bits) = read_exp_golomb(&payload, bit_pos)?;
+    bit_pos += bits;
+
+    // weighted_pred_flag (1 bit)
+    let (_, bits) = read_bits(&payload, bit_pos, 1)?;
+    bit_pos += bits;
+
+    // weighted_bipred_idc (2 bits)
+    let (_, bits) = read_bits(&payload, bit_pos, 2)?;
+    bit_pos += bits;
+
+    // pic_init_qp_minus26 (se)
+    let (_, bits) = read_exp_golomb(&payload, bit_pos)?;
+    bit_pos += bits;
+
+    // pic_init_qs_minus26 (se)
+    let (_, bits) = read_exp_golomb(&payload, bit_pos)?;
+    bit_pos += bits;
+
+    // chroma_qp_index_offset (se)
+    let (_, bits) = read_exp_golomb(&payload, bit_pos)?;
+    bit_pos += bits;
+
+    // deblocking_filter_control_present_flag (1 bit)
+    let (deblocking_flag, _) = read_bits(&payload, bit_pos, 1)?;
+
+    debug!(
+        entropy_coding_mode_flag = entropy_flag,
+        deblocking_filter_control_present_flag = deblocking_flag,
+        "parsed PPS"
+    );
 
     Some(PpsInfo {
-        entropy_coding_mode_flag: flag as u8,
+        entropy_coding_mode_flag: entropy_flag as u8,
+        deblocking_filter_control_present_flag: deblocking_flag as u8,
     })
 }
 
@@ -288,8 +344,9 @@ fn parse_pps(raw_payload: &[u8]) -> Option<PpsInfo> {
 // ---------------------------------------------------------------------------
 
 /// Parse a P-slice NAL to extract the first mb_skip_run.
+/// `nal_ref_idc` is bits 5-6 of the NAL header byte (0 = non-reference frame).
 /// Returns (skip_run, total_mbs) or None if parsing fails.
-fn parse_first_skip_run(raw_payload: &[u8], sps: &SpsInfo, _pps: &PpsInfo) -> Option<(u32, u32)> {
+fn parse_first_skip_run(raw_payload: &[u8], sps: &SpsInfo, pps: &PpsInfo, nal_ref_idc: u8) -> Option<(u32, u32)> {
     let payload = strip_emulation_prevention(raw_payload);
     let mut bit_pos: usize = 0;
 
@@ -348,43 +405,40 @@ fn parse_first_skip_run(raw_payload: &[u8], sps: &SpsInfo, _pps: &PpsInfo) -> Op
         }
     }
 
-    // dec_ref_pic_marking() — only for reference pictures (nal_ref_idc > 0)
-    // For non-IDR (NAL type 1), if nal_ref_idc > 0:
-    //   adaptive_ref_pic_marking_mode_flag (1 bit)
-    // We don't know nal_ref_idc here, but for P-slices it's usually > 0.
-    // However, to keep things simple and avoid over-parsing, we'll read
-    // the flag. If it's 0, no more data. If it's 1, we'd need to loop.
-    // For Baseline with 1 reference frame, this is almost always 0.
-    let (marking_flag, bits) = read_bits(&payload, bit_pos, 1)?;
-    bit_pos += bits;
+    // dec_ref_pic_marking() — ONLY present when nal_ref_idc > 0
+    if nal_ref_idc > 0 {
+        // For non-IDR (NAL type 1): adaptive_ref_pic_marking_mode_flag (1 bit)
+        let (marking_flag, bits) = read_bits(&payload, bit_pos, 1)?;
+        bit_pos += bits;
 
-    if marking_flag == 1 {
-        // adaptive ref pic marking — loop until op == 0
-        loop {
-            let (op, bits) = read_exp_golomb(&payload, bit_pos)?;
-            bit_pos += bits;
-            if op == 0 {
-                break;
-            }
-            match op {
-                1 | 3 => {
-                    let (_, bits) = read_exp_golomb(&payload, bit_pos)?;
-                    bit_pos += bits;
+        if marking_flag == 1 {
+            // adaptive ref pic marking — loop until op == 0
+            loop {
+                let (op, bits) = read_exp_golomb(&payload, bit_pos)?;
+                bit_pos += bits;
+                if op == 0 {
+                    break;
                 }
-                2 => {
-                    let (_, bits) = read_exp_golomb(&payload, bit_pos)?;
-                    bit_pos += bits;
+                match op {
+                    1 | 3 => {
+                        let (_, bits) = read_exp_golomb(&payload, bit_pos)?;
+                        bit_pos += bits;
+                    }
+                    2 => {
+                        let (_, bits) = read_exp_golomb(&payload, bit_pos)?;
+                        bit_pos += bits;
+                    }
+                    4 => {
+                        let (_, bits) = read_exp_golomb(&payload, bit_pos)?;
+                        bit_pos += bits;
+                    }
+                    5 => {} // no extra data
+                    6 => {
+                        let (_, bits) = read_exp_golomb(&payload, bit_pos)?;
+                        bit_pos += bits;
+                    }
+                    _ => break,
                 }
-                4 => {
-                    let (_, bits) = read_exp_golomb(&payload, bit_pos)?;
-                    bit_pos += bits;
-                }
-                5 => {} // no extra data
-                6 => {
-                    let (_, bits) = read_exp_golomb(&payload, bit_pos)?;
-                    bit_pos += bits;
-                }
-                _ => break,
             }
         }
     }
@@ -393,22 +447,18 @@ fn parse_first_skip_run(raw_payload: &[u8], sps: &SpsInfo, _pps: &PpsInfo) -> Op
     let (_, bits) = read_exp_golomb(&payload, bit_pos)?;
     bit_pos += bits;
 
-    // For Baseline profile, no deblocking_filter_control_present_flag parsing is needed
-    // in the slice header before slice data... actually:
-    // If deblocking_filter_control_present_flag (from PPS) is 1:
-    //   disable_deblocking_filter_idc (ue)
-    //   if != 1: slice_alpha_c0_offset_div2 (se), slice_beta_offset_div2 (se)
-    // We don't parse PPS deeply enough for this flag. For Baseline with default
-    // PPS, this flag is typically 1. Let's try to read it:
-    let (deblocking_idc, bits) = read_exp_golomb(&payload, bit_pos)?;
-    bit_pos += bits;
-    if deblocking_idc != 1 {
-        // slice_alpha_c0_offset_div2 (se)
-        let (_, bits) = read_exp_golomb(&payload, bit_pos)?;
+    // deblocking filter fields only present if PPS says so
+    if pps.deblocking_filter_control_present_flag != 0 {
+        let (deblocking_idc, bits) = read_exp_golomb(&payload, bit_pos)?;
         bit_pos += bits;
-        // slice_beta_offset_div2 (se)
-        let (_, bits) = read_exp_golomb(&payload, bit_pos)?;
-        bit_pos += bits;
+        if deblocking_idc != 1 {
+            // slice_alpha_c0_offset_div2 (se)
+            let (_, bits) = read_exp_golomb(&payload, bit_pos)?;
+            bit_pos += bits;
+            // slice_beta_offset_div2 (se)
+            let (_, bits) = read_exp_golomb(&payload, bit_pos)?;
+            bit_pos += bits;
+        }
     }
 
     // NOW we're at slice data — first element is mb_skip_run (ue) for P-slice with CAVLC
@@ -506,8 +556,8 @@ impl MotionFilter {
     /// Scan an IDR access unit for SPS (type 7) and PPS (type 8) NALs.
     fn extract_sps_pps(&mut self, access_unit: &[u8]) {
         let nals = scan_nals(access_unit);
-        for (nal_type, payload) in &nals {
-            match nal_type {
+        for (nal_header, payload) in &nals {
+            match nal_header & 0x1F {
                 7 => {
                     if let Some(sps) = parse_sps(payload) {
                         info!(
@@ -544,9 +594,10 @@ impl MotionFilter {
 
         // Find the first VCL NAL (type 1) in the access unit
         let nals = scan_nals(access_unit);
-        for (nt, payload) in &nals {
-            if *nt == 1 {
-                if let Some((skip_run, total_mbs)) = parse_first_skip_run(payload, sps, pps) {
+        for (nal_header, payload) in &nals {
+            if nal_header & 0x1F == 1 {
+                let nal_ref_idc = (nal_header >> 5) & 0x3;
+                if let Some((skip_run, total_mbs)) = parse_first_skip_run(payload, sps, pps, nal_ref_idc) {
                     let skip_ratio = skip_run.min(total_mbs) as f64 / total_mbs as f64;
                     let motion_ratio = 1.0 - skip_ratio;
                     return Some(motion_ratio);
@@ -583,6 +634,7 @@ mod tests {
     fn make_test_pps() -> PpsInfo {
         PpsInfo {
             entropy_coding_mode_flag: 0, // CAVLC
+            deblocking_filter_control_present_flag: 1,
         }
     }
 
@@ -660,9 +712,9 @@ mod tests {
 
         let nals = scan_nals(&au);
         assert_eq!(nals.len(), 3);
-        assert_eq!(nals[0].0, 7); // SPS
-        assert_eq!(nals[1].0, 8); // PPS
-        assert_eq!(nals[2].0, 5); // IDR
+        assert_eq!(nals[0].0 & 0x1F, 7); // SPS
+        assert_eq!(nals[1].0 & 0x1F, 8); // PPS
+        assert_eq!(nals[2].0 & 0x1F, 5); // IDR
     }
 
     #[test]
