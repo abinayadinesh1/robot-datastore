@@ -67,6 +67,9 @@ async fn main() {
     let eviction_config = config.eviction.clone();
     let aws_config = config.aws_s3.clone();
     let stats_path = std::path::Path::new(&config.database.path).join("storage_stats.json");
+
+    // using async move means the task has ownership of everything it uses, so those things have ownership for 
+    // as long as the task is around. 
     tokio::spawn(async move {
         eviction::run_eviction_loop(eviction_storage, &eviction_config, &aws_config, stats_path)
             .await;
@@ -190,6 +193,7 @@ async fn run_robot_pipeline(
         filter_config.phash_threshold,
         filter_config.phash_hash_size,
         filter_config.spike_ratio,
+        filter_config.quiet_ratio,
         Arc::clone(&rustfs),
         segment_db,
         rustfs_prefix,

@@ -66,6 +66,7 @@ impl RecordingStateMachine {
         phash_threshold: u32,
         hash_size: u32,
         spike_ratio: f64,
+        quiet_ratio: f64,
         storage: Arc<RustfsStorage>,
         db: Option<Arc<SegmentDb>>,
         prefix: String,
@@ -80,7 +81,7 @@ impl RecordingStateMachine {
             db,
             prefix,
             robot_id,
-            frame_size_filter: FrameSizeFilter::new(spike_ratio),
+            frame_size_filter: FrameSizeFilter::new(spike_ratio, quiet_ratio),
             frames_in_current_state: 0,
         }
     }

@@ -56,6 +56,11 @@ pub struct FilterConfig {
     /// A P-frame is "active" if its size > spike_ratio * EMA(p_frame_sizes).
     #[serde(default = "default_spike_ratio")]
     pub spike_ratio: f64,
+    /// Frame-size quiet ratio for H.264 ACTIVE→IDLE detection.
+    /// A P-frame is "quiet" if its size < quiet_ratio * EMA(p_frame_sizes).
+    /// Should be lower than spike_ratio to create a dead-zone that prevents jitter.
+    #[serde(default = "default_quiet_ratio")]
+    pub quiet_ratio: f64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -231,6 +236,9 @@ fn default_histogram_threshold() -> f64 {
 }
 fn default_spike_ratio() -> f64 {
     4.0
+}
+fn default_quiet_ratio() -> f64 {
+    1.5
 }
 fn default_rustfs_bucket() -> String {
     "camera-frames".into()

@@ -173,6 +173,7 @@ async fn create_stream(
         return (StatusCode::INTERNAL_SERVER_ERROR, "pipeline event loop is down").into_response();
     }
 
+    // Main loop responds!
     match reply_rx.await {
         Ok(Ok(())) => {
             info!(robot_id = robot.robot_id, "robot added and pipeline spawned");
