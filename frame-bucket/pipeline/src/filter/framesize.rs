@@ -144,6 +144,10 @@ struct SpsInfo {
     total_mbs: u32,
     /// log2_max_frame_num_minus4 (needed for slice header parsing)
     log2_max_frame_num_minus4: u32,
+    /// pic_order_cnt_type (0, 1, or 2)
+    pic_order_cnt_type: u32,
+    /// log2_max_pic_order_cnt_lsb_minus4 (only valid when pic_order_cnt_type == 0)
+    log2_max_pic_order_cnt_lsb_minus4: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -191,10 +195,12 @@ fn parse_sps(raw_payload: &[u8]) -> Option<SpsInfo> {
     let (poc_type, bits) = read_exp_golomb(&payload, bit_pos)?;
     bit_pos += bits;
 
+    let mut log2_max_pic_order_cnt_lsb_minus4 = 0u32;
     match poc_type {
         0 => {
             // log2_max_pic_order_cnt_lsb_minus4 (ue)
-            let (_, bits) = read_exp_golomb(&payload, bit_pos)?;
+            let (val, bits) = read_exp_golomb(&payload, bit_pos)?;
+            log2_max_pic_order_cnt_lsb_minus4 = val;
             bit_pos += bits;
         }
         1 => {
@@ -243,6 +249,8 @@ fn parse_sps(raw_payload: &[u8]) -> Option<SpsInfo> {
     debug!(
         profile_idc,
         log2_max_frame_num_minus4,
+        poc_type,
+        log2_max_pic_order_cnt_lsb_minus4,
         pic_width_in_mbs = w,
         pic_height_in_map_units = h,
         total_mbs = w * h,
@@ -254,6 +262,8 @@ fn parse_sps(raw_payload: &[u8]) -> Option<SpsInfo> {
         pic_height_in_map_units: h,
         total_mbs: w * h,
         log2_max_frame_num_minus4,
+        pic_order_cnt_type: poc_type,
+        log2_max_pic_order_cnt_lsb_minus4,
     })
 }
 
@@ -375,6 +385,19 @@ fn parse_first_skip_run(raw_payload: &[u8], sps: &SpsInfo, pps: &PpsInfo, nal_re
     bit_pos += bits;
 
     // For Baseline profile, frame_mbs_only_flag is always 1, so no field_pic_flag.
+
+    // pic_order_cnt_lsb — only when pic_order_cnt_type == 0
+    if sps.pic_order_cnt_type == 0 {
+        let poc_lsb_bits = (sps.log2_max_pic_order_cnt_lsb_minus4 + 4) as usize;
+        let (_, bits) = read_bits(&payload, bit_pos, poc_lsb_bits)?;
+        bit_pos += bits;
+        // Note: delta_pic_order_cnt_bottom is only present when
+        // bottom_field_pic_order_in_frame_present_flag && !field_pic_flag.
+        // For Baseline (frame_mbs_only=1), field_pic_flag doesn't exist,
+        // and bottom_field_pic_order_in_frame_present_flag is typically 0.
+    }
+    // pic_order_cnt_type == 1: would need delta_pic_order_cnt parsing
+    // pic_order_cnt_type == 2: no additional fields
 
     // num_ref_idx_active_override_flag (1 bit)
     let (override_flag, bits) = read_bits(&payload, bit_pos, 1)?;
@@ -628,6 +651,8 @@ mod tests {
             pic_height_in_map_units: 45,
             total_mbs: 3600,
             log2_max_frame_num_minus4: 0,
+            pic_order_cnt_type: 2,
+            log2_max_pic_order_cnt_lsb_minus4: 0,
         }
     }
 
