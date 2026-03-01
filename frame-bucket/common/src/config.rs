@@ -52,15 +52,16 @@ pub struct FilterConfig {
     pub phash_hash_size: u32,
     #[serde(default = "default_histogram_threshold")]
     pub histogram_threshold: f64,
-    /// Frame-size spike ratio for H.264 P-frame activity detection.
-    /// A P-frame is "active" if its size > spike_ratio * EMA(p_frame_sizes).
-    #[serde(default = "default_spike_ratio")]
-    pub spike_ratio: f64,
-    /// Frame-size quiet ratio for H.264 ACTIVE→IDLE detection.
-    /// A P-frame is "quiet" if its size < quiet_ratio * EMA(p_frame_sizes).
-    /// Should be lower than spike_ratio to create a dead-zone that prevents jitter.
-    #[serde(default = "default_quiet_ratio")]
-    pub quiet_ratio: f64,
+    /// Motion ratio threshold for H.264 P-frame activity detection (MB skip-count).
+    /// A P-frame is "active" if motion_ratio > motion_threshold.
+    /// motion_ratio = 1.0 - (first_skip_run / total_mbs).
+    #[serde(default = "default_motion_threshold", alias = "spike_ratio")]
+    pub motion_threshold: f64,
+    /// Quiet threshold for H.264 ACTIVE→IDLE detection (MB skip-count).
+    /// A P-frame is "quiet" if motion_ratio < quiet_threshold.
+    /// Should be lower than motion_threshold to create a dead-zone that prevents jitter.
+    #[serde(default = "default_quiet_threshold", alias = "quiet_ratio")]
+    pub quiet_threshold: f64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -234,11 +235,11 @@ fn default_phash_hash_size() -> u32 {
 fn default_histogram_threshold() -> f64 {
     0.15
 }
-fn default_spike_ratio() -> f64 {
-    4.0
+fn default_motion_threshold() -> f64 {
+    0.05
 }
-fn default_quiet_ratio() -> f64 {
-    1.5
+fn default_quiet_threshold() -> f64 {
+    0.02
 }
 fn default_rustfs_bucket() -> String {
     "camera-frames".into()

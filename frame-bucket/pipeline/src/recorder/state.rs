@@ -7,7 +7,7 @@ use tokio::time::Instant;
 use tracing::{debug, error, info, warn};
 
 use crate::db::SegmentDb;
-use crate::filter::framesize::FrameSizeFilter;
+use crate::filter::framesize::MotionFilter;
 use crate::filter::phash::{compute_ahash, hamming};
 use crate::storage::RustfsStorage;
 
@@ -53,8 +53,8 @@ pub struct RecordingStateMachine {
     db: Option<Arc<SegmentDb>>,
     prefix: String,
     robot_id: String,
-    /// Frame-size heuristic filter for H.264 streams.
-    frame_size_filter: FrameSizeFilter,
+    /// Motion filter for H.264 streams (MB skip-count based).
+    motion_filter: MotionFilter,
     /// Counts frames spent in the current state (reset on transitions).
     /// Used to throttle debug logging to every 100 frames.
     frames_in_current_state: u64,
@@ -65,8 +65,8 @@ impl RecordingStateMachine {
         config: RecordingConfig,
         phash_threshold: u32,
         hash_size: u32,
-        spike_ratio: f64,
-        quiet_ratio: f64,
+        motion_threshold: f64,
+        quiet_threshold: f64,
         storage: Arc<RustfsStorage>,
         db: Option<Arc<SegmentDb>>,
         prefix: String,
@@ -81,7 +81,7 @@ impl RecordingStateMachine {
             db,
             prefix,
             robot_id,
-            frame_size_filter: FrameSizeFilter::new(spike_ratio, quiet_ratio),
+            motion_filter: MotionFilter::new(motion_threshold, quiet_threshold),
             frames_in_current_state: 0,
         }
     }
@@ -377,7 +377,7 @@ impl RecordingStateMachine {
         nal_type: u8,
     ) {
         let frame_size = h264_data.len();
-        let is_active = self.frame_size_filter.is_active(frame_size, nal_type, h264_data);
+        let is_active = self.motion_filter.is_active(frame_size, nal_type, h264_data);
 
         // First frame ever: enter Idle.
         if self.state.is_none() {
@@ -502,7 +502,7 @@ impl RecordingStateMachine {
                 }
 
                 // Check Active→Idle: count consecutive quiet P-frames
-                if self.frame_size_filter.is_quiet(frame_size) {
+                if self.motion_filter.is_quiet(frame_size, nal_type, h264_data) {
                     consecutive_idle_count += 1;
                     self.frames_in_current_state += 1;
                     if self.frames_in_current_state % 100 == 0 {
