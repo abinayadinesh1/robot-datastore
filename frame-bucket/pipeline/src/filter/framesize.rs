@@ -1,4 +1,6 @@
-use tracing::{debug, info};
+use std::fs::{File, OpenOptions};
+use std::io::Write;
+use tracing::debug;
 
 pub struct FrameSizeFilter {
     baseline_ema: f64,
@@ -7,10 +9,22 @@ pub struct FrameSizeFilter {
     quiet_ratio: f64,
     frames_seen: u64,
     warmup_frames: u64,
+    log_file: Option<File>,
 }
 
 impl FrameSizeFilter {
     pub fn new(spike_ratio: f64, quiet_ratio: f64) -> Self {
+        let log_file = OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open("/tmp/frame_sizes.csv")
+            .ok()
+            .map(|mut f| {
+                let _ = writeln!(f, "frame_size");
+                f
+            });
+
         Self {
             baseline_ema: 0.0,
             alpha: 0.05,
@@ -18,26 +32,12 @@ impl FrameSizeFilter {
             quiet_ratio,
             frames_seen: 0,
             warmup_frames: 30,
+            log_file,
         }
     }
 
     pub fn is_active(&mut self, frame_size: usize, nal_type: u8) -> bool {
         self.frames_seen += 1;
-
-        let nal_label = match nal_type {
-            1 => "P/B",
-            5 => "IDR",
-            _ => "other",
-        };
-        if nal_type == 1 {
-            info!(
-                frame_size,
-                nal_type,
-                nal_label,
-                ema = format!("{:.0}", self.baseline_ema),
-                "raw frame"
-            );
-        }
 
         if nal_type == 5 {
             return true;
@@ -64,6 +64,10 @@ impl FrameSizeFilter {
             is_spike,
             "P-frame size check"
         );
+
+        if let Some(f) = &mut self.log_file {
+            let _ = writeln!(f, "{}", frame_size);
+        }
 
         if !is_spike {
             self.update_ema(frame_size);
