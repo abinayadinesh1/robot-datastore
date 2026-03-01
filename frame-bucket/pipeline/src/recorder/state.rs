@@ -377,7 +377,7 @@ impl RecordingStateMachine {
         nal_type: u8,
     ) {
         let frame_size = h264_data.len();
-        let is_active = self.frame_size_filter.is_active(frame_size, nal_type);
+        let is_active = self.frame_size_filter.is_active(frame_size, nal_type, h264_data);
 
         // First frame ever: enter Idle.
         if self.state.is_none() {
