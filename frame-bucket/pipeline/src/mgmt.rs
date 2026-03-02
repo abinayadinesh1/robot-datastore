@@ -6,7 +6,7 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::{delete, get};
 use axum::{Json, Router};
-use frame_bucket_common::config::{Config, RobotConfig};
+use frame_bucket_common::config::{Config, LiveFilterParams, RobotConfig};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, oneshot};
 use tower_http::cors::{Any, CorsLayer};
@@ -30,6 +30,7 @@ pub enum Command {
 struct MgmtState {
     config_path: PathBuf,
     cmd_tx: mpsc::Sender<Command>,
+    live_params: Arc<LiveFilterParams>,
 }
 
 // ---------------------------------------------------------------------------
@@ -228,11 +229,64 @@ async fn delete_stream(
 }
 
 // ---------------------------------------------------------------------------
+// Filter config endpoints
+// ---------------------------------------------------------------------------
+
+/// GET /config/filter — return current live filter parameters
+async fn get_filter_config(State(state): State<Arc<MgmtState>>) -> impl IntoResponse {
+    Json(state.live_params.snapshot())
+}
+
+/// PATCH /config/filter — update one or more filter parameters in real time
+#[derive(Debug, Deserialize)]
+struct PatchFilterRequest {
+    phash_threshold: Option<u32>,
+    phash_hash_size: Option<u32>,
+    motion_threshold: Option<f64>,
+    quiet_threshold: Option<f64>,
+    histogram_threshold: Option<f64>,
+}
+
+async fn patch_filter_config(
+    State(state): State<Arc<MgmtState>>,
+    Json(body): Json<PatchFilterRequest>,
+) -> impl IntoResponse {
+    if let Some(v) = body.phash_threshold {
+        state.live_params.set_phash_threshold(v);
+        info!(phash_threshold = v, "filter param updated");
+    }
+    if let Some(v) = body.phash_hash_size {
+        state.live_params.set_phash_hash_size(v);
+        info!(phash_hash_size = v, "filter param updated");
+    }
+    if let Some(v) = body.motion_threshold {
+        state.live_params.set_motion_threshold(v);
+        info!(motion_threshold = v, "filter param updated");
+    }
+    if let Some(v) = body.quiet_threshold {
+        state.live_params.set_quiet_threshold(v);
+        info!(quiet_threshold = v, "filter param updated");
+    }
+    if let Some(v) = body.histogram_threshold {
+        state.live_params.set_histogram_threshold(v);
+        info!(histogram_threshold = v, "filter param updated");
+    }
+
+    // Return updated snapshot
+    Json(state.live_params.snapshot())
+}
+
+// ---------------------------------------------------------------------------
 // Server
 // ---------------------------------------------------------------------------
 
-pub async fn serve(port: u16, config_path: PathBuf, cmd_tx: mpsc::Sender<Command>) {
-    let state = Arc::new(MgmtState { config_path, cmd_tx });
+pub async fn serve(
+    port: u16,
+    config_path: PathBuf,
+    cmd_tx: mpsc::Sender<Command>,
+    live_params: Arc<LiveFilterParams>,
+) {
+    let state = Arc::new(MgmtState { config_path, cmd_tx, live_params });
 
     let cors = CorsLayer::new()
         .allow_origin(Any)
@@ -242,6 +296,7 @@ pub async fn serve(port: u16, config_path: PathBuf, cmd_tx: mpsc::Sender<Command
     let app = Router::new()
         .route("/streams", get(list_streams).post(create_stream))
         .route("/streams/:robot_id", delete(delete_stream))
+        .route("/config/filter", get(get_filter_config).patch(patch_filter_config))
         .layer(cors)
         .with_state(state);
 

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use frame_bucket_common::config::RecordingConfig;
+use frame_bucket_common::config::{LiveFilterParams, RecordingConfig};
 use frame_bucket_common::frame::{FramePayload, TimestampedFrame};
 use tokio::time::Instant;
 use tracing::{debug, error, info, warn};
@@ -47,8 +47,7 @@ enum RecordingState {
 pub struct RecordingStateMachine {
     state: Option<RecordingState>, // Option so we can take() during transitions
     config: RecordingConfig,
-    phash_threshold: u32,
-    hash_size: u32,
+    live_params: Arc<LiveFilterParams>,
     storage: Arc<RustfsStorage>,
     db: Option<Arc<SegmentDb>>,
     prefix: String,
@@ -63,25 +62,22 @@ pub struct RecordingStateMachine {
 impl RecordingStateMachine {
     pub fn new(
         config: RecordingConfig,
-        phash_threshold: u32,
-        hash_size: u32,
-        motion_threshold: f64,
-        quiet_threshold: f64,
+        live_params: Arc<LiveFilterParams>,
         storage: Arc<RustfsStorage>,
         db: Option<Arc<SegmentDb>>,
         prefix: String,
         robot_id: String,
     ) -> Self {
+        let motion_filter = MotionFilter::new(Arc::clone(&live_params));
         Self {
             state: None,
             config,
-            phash_threshold,
-            hash_size,
+            live_params,
             storage,
             db,
             prefix,
             robot_id,
-            motion_filter: MotionFilter::new(motion_threshold, quiet_threshold),
+            motion_filter,
             frames_in_current_state: 0,
         }
     }
@@ -103,7 +99,7 @@ impl RecordingStateMachine {
     // =========================================================================
 
     async fn process_jpeg_frame(&mut self, frame: &TimestampedFrame, jpeg_data: &[u8]) {
-        let hash = match compute_ahash(jpeg_data, self.hash_size) {
+        let hash = match compute_ahash(jpeg_data, self.live_params.get_phash_hash_size()) {
             Some(h) => h,
             None => {
                 warn!(ts = frame.captured_at_ms, "failed to compute aHash for frame, skipping");
@@ -155,12 +151,12 @@ impl RecordingStateMachine {
         let initial_hash_ref = initial_hash.as_ref().expect("JPEG idle must have hash");
         let dist = hamming(initial_hash_ref, hash);
 
-        if dist <= self.phash_threshold {
+        if dist <= self.live_params.get_phash_threshold() {
             self.frames_in_current_state += 1;
             if self.frames_in_current_state % 100 == 0 {
                 debug!(
                     dist,
-                    threshold = self.phash_threshold,
+                    threshold = self.live_params.get_phash_threshold(),
                     ts = frame.captured_at_ms,
                     frames_in_state = self.frames_in_current_state,
                     "IDLE: frame similar to baseline"
@@ -178,7 +174,7 @@ impl RecordingStateMachine {
         self.frames_in_current_state = 0;
         info!(
             dist,
-            threshold = self.phash_threshold,
+            threshold = self.live_params.get_phash_threshold(),
             idle_start_ms,
             idle_end_ms = last_similar_ms,
             "IDLE→ACTIVE: scene changed, finalizing idle record"
@@ -269,7 +265,7 @@ impl RecordingStateMachine {
         // Check Active→Idle transition (consecutive similar frames)
         let prev_hash = last_frame_hash.as_ref().expect("JPEG active must have hash");
         let dist = hamming(prev_hash, hash);
-        if dist <= self.phash_threshold {
+        if dist <= self.live_params.get_phash_threshold() {
             consecutive_idle_count += 1;
             self.frames_in_current_state += 1;
             if self.frames_in_current_state % 100 == 0 {

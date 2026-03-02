@@ -20,7 +20,7 @@ webrtc_url = ""
 
 [filter]
 primary = "framesize"       # "phash", "histogram", or "framesize" (for H.264)
-phash_threshold = 26        # hamming distance (out of 256 bits) - 26, ~10% difference
+phash_threshold = 20        # hamming distance (out of 256 bits) - 26, ~10% difference
 phash_hash_size = 16
 histogram_threshold = 0.15  # chi-squared distance
 spike_ratio = 4.0           # P-frame size spike detection threshold for framesize filter
@@ -58,9 +58,9 @@ rustfs_bucket = "camera-frames"
 labelled_data_bucket = "labelled-data"             # bucket for saved clip manifests
 
 [recording]
-segment_duration_secs = 60
+segment_duration_secs = 120
 codec = "h264"       # "h264" or "h265"
 crf = 23             # quality: lower = better, 18-28 is typical range
 preset = "fast"      # encoding speed: ultrafast, superfast, veryfast, faster, fast, medium, slow
 fps = 30.0
-active_to_idle_consecutive_frames = 70  # how many similar frames trigger idle transition
+active_to_idle_consecutive_frames = 30  # how many similar frames trigger idle transition

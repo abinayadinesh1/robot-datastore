@@ -5,7 +5,7 @@ mod filter;
 mod recorder;
 mod storage;
 
-use frame_bucket_common::config::{Config, RobotConfig};
+use frame_bucket_common::config::{Config, LiveFilterParams, RobotConfig};
 use frame_bucket_common::frame::TimestampedFrame;
 use recorder::RecordingStateMachine;
 use std::collections::HashMap;
@@ -75,12 +75,21 @@ async fn main() {
             .await;
     });
 
+    // Shared, atomically-updated filter parameters — read by every robot pipeline,
+    // written by the management API for real-time tuning.
+    let live_params = LiveFilterParams::from_config(&config.filter);
+
     // Channel for the management API to send commands to the main loop
     let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::channel::<mgmt::Command>(16);
 
     // Start management HTTP server
     let mgmt_port = config.api.mgmt_port;
-    tokio::spawn(mgmt::serve(mgmt_port, config_path.clone(), cmd_tx));
+    tokio::spawn(mgmt::serve(
+        mgmt_port,
+        config_path.clone(),
+        cmd_tx,
+        Arc::clone(&live_params),
+    ));
 
     // Track running robot pipelines by robot_id
     let mut running: HashMap<String, JoinHandle<()>> = HashMap::new();
@@ -90,7 +99,7 @@ async fn main() {
         let handle = spawn_robot_task(
             robot.clone(),
             Arc::clone(&rustfs_storage),
-            config.filter.clone(),
+            Arc::clone(&live_params),
             config.recording.clone(),
             config.database.path.clone(),
             config.rustfs.prefix.clone(),
@@ -127,7 +136,7 @@ async fn main() {
                     let handle = spawn_robot_task(
                         robot.clone(),
                         Arc::clone(&rustfs_storage),
-                        config.filter.clone(),
+                        Arc::clone(&live_params),
                         config.recording.clone(),
                         config.database.path.clone(),
                         config.rustfs.prefix.clone(),
@@ -152,13 +161,13 @@ async fn main() {
 fn spawn_robot_task(
     robot: RobotConfig,
     rustfs: Arc<storage::RustfsStorage>,
-    filter_config: frame_bucket_common::config::FilterConfig,
+    live_params: Arc<LiveFilterParams>,
     recording_config: frame_bucket_common::config::RecordingConfig,
     db_path: String,
     rustfs_prefix: String,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
-        run_robot_pipeline(robot, rustfs, filter_config, recording_config, db_path, rustfs_prefix)
+        run_robot_pipeline(robot, rustfs, live_params, recording_config, db_path, rustfs_prefix)
             .await;
     })
 }
@@ -166,7 +175,7 @@ fn spawn_robot_task(
 async fn run_robot_pipeline(
     robot: RobotConfig,
     rustfs: Arc<storage::RustfsStorage>,
-    filter_config: frame_bucket_common::config::FilterConfig,
+    live_params: Arc<LiveFilterParams>,
     recording_config: frame_bucket_common::config::RecordingConfig,
     db_path: String,
     rustfs_prefix: String,
@@ -190,10 +199,7 @@ async fn run_robot_pipeline(
     // Per-robot recording state machine
     let mut state_machine = RecordingStateMachine::new(
         recording_config,
-        filter_config.phash_threshold,
-        filter_config.phash_hash_size,
-        filter_config.motion_threshold,
-        filter_config.quiet_threshold,
+        live_params,
         Arc::clone(&rustfs),
         segment_db,
         rustfs_prefix,

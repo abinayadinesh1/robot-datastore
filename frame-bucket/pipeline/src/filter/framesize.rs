@@ -1,5 +1,8 @@
 use std::fs::{File, OpenOptions};
 use std::io::Write;
+use std::sync::Arc;
+
+use frame_bucket_common::config::LiveFilterParams;
 use tracing::{debug, info, warn};
 
 // ---------------------------------------------------------------------------
@@ -497,13 +500,12 @@ fn parse_first_skip_run(raw_payload: &[u8], sps: &SpsInfo, pps: &PpsInfo, nal_re
 pub struct MotionFilter {
     sps: Option<SpsInfo>,
     pps: Option<PpsInfo>,
-    motion_threshold: f64,
-    quiet_threshold: f64,
+    live_params: Arc<LiveFilterParams>,
     log_file: Option<File>,
 }
 
 impl MotionFilter {
-    pub fn new(motion_threshold: f64, quiet_threshold: f64) -> Self {
+    pub fn new(live_params: Arc<LiveFilterParams>) -> Self {
         let log_file = OpenOptions::new()
             .create(true)
             .truncate(true)
@@ -518,8 +520,7 @@ impl MotionFilter {
         Self {
             sps: None,
             pps: None,
-            motion_threshold,
-            quiet_threshold,
+            live_params,
             log_file,
         }
     }
@@ -542,10 +543,11 @@ impl MotionFilter {
         // P-frame: compute motion ratio
         match self.compute_motion_ratio(nal_data) {
             Some(motion_ratio) => {
-                let active = motion_ratio > self.motion_threshold;
+                let threshold = self.live_params.get_motion_threshold();
+                let active = motion_ratio > threshold;
                 debug!(
                     motion_ratio = format!("{:.4}", motion_ratio),
-                    threshold = self.motion_threshold,
+                    threshold,
                     active,
                     "P-frame motion check"
                 );
@@ -571,7 +573,7 @@ impl MotionFilter {
         }
 
         match self.compute_motion_ratio(nal_data) {
-            Some(motion_ratio) => motion_ratio < self.quiet_threshold,
+            Some(motion_ratio) => motion_ratio < self.live_params.get_quiet_threshold(),
             None => false,
         }
     }
@@ -644,6 +646,18 @@ impl MotionFilter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use frame_bucket_common::config::FilterConfig;
+
+    fn make_test_params(motion_threshold: f64, quiet_threshold: f64) -> Arc<LiveFilterParams> {
+        LiveFilterParams::from_config(&FilterConfig {
+            primary: "framesize".into(),
+            phash_threshold: 20,
+            phash_hash_size: 16,
+            histogram_threshold: 0.15,
+            motion_threshold,
+            quiet_threshold,
+        })
+    }
 
     // Helper: build a minimal SPS for 1280x720 Baseline
     // 1280 / 16 = 80 MBs wide, 720 / 16 = 45 MBs tall → total = 3600
@@ -667,13 +681,13 @@ mod tests {
 
     #[test]
     fn idr_always_active() {
-        let mut filter = MotionFilter::new(0.05, 0.02);
+        let mut filter = MotionFilter::new(make_test_params(0.05, 0.02));
         assert!(filter.is_active(5000, 5, &[]));
     }
 
     #[test]
     fn no_sps_pps_defaults_active() {
-        let mut filter = MotionFilter::new(0.05, 0.02);
+        let mut filter = MotionFilter::new(make_test_params(0.05, 0.02));
         // No SPS/PPS cached → is_active returns true, is_quiet returns false
         assert!(filter.is_active(1000, 1, &[]));
         assert!(!filter.is_quiet(1000, 1, &[]));

@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
@@ -62,6 +64,100 @@ pub struct FilterConfig {
     /// Should be lower than motion_threshold to create a dead-zone that prevents jitter.
     #[serde(default = "default_quiet_threshold", alias = "quiet_ratio")]
     pub quiet_threshold: f64,
+}
+
+/// Shared, atomically-updated filter parameters that running pipelines read
+/// on every frame. The management API writes new values; no restart required.
+pub struct LiveFilterParams {
+    pub phash_threshold: AtomicU32,
+    pub phash_hash_size: AtomicU32,
+    pub motion_threshold: AtomicU64, // f64 bits via to_bits/from_bits
+    pub quiet_threshold: AtomicU64,
+    pub histogram_threshold: AtomicU64,
+}
+
+impl LiveFilterParams {
+    pub fn from_config(fc: &FilterConfig) -> Arc<Self> {
+        Arc::new(Self {
+            phash_threshold: AtomicU32::new(fc.phash_threshold),
+            phash_hash_size: AtomicU32::new(fc.phash_hash_size),
+            motion_threshold: AtomicU64::new(fc.motion_threshold.to_bits()),
+            quiet_threshold: AtomicU64::new(fc.quiet_threshold.to_bits()),
+            histogram_threshold: AtomicU64::new(fc.histogram_threshold.to_bits()),
+        })
+    }
+
+    pub fn get_phash_threshold(&self) -> u32 {
+        self.phash_threshold.load(Ordering::Relaxed)
+    }
+
+    pub fn get_phash_hash_size(&self) -> u32 {
+        self.phash_hash_size.load(Ordering::Relaxed)
+    }
+
+    pub fn get_motion_threshold(&self) -> f64 {
+        f64::from_bits(self.motion_threshold.load(Ordering::Relaxed))
+    }
+
+    pub fn get_quiet_threshold(&self) -> f64 {
+        f64::from_bits(self.quiet_threshold.load(Ordering::Relaxed))
+    }
+
+    pub fn get_histogram_threshold(&self) -> f64 {
+        f64::from_bits(self.histogram_threshold.load(Ordering::Relaxed))
+    }
+
+    pub fn set_phash_threshold(&self, val: u32) {
+        self.phash_threshold.store(val, Ordering::Relaxed);
+    }
+
+    pub fn set_phash_hash_size(&self, val: u32) {
+        self.phash_hash_size.store(val, Ordering::Relaxed);
+    }
+
+    pub fn set_motion_threshold(&self, val: f64) {
+        self.motion_threshold.store(val.to_bits(), Ordering::Relaxed);
+    }
+
+    pub fn set_quiet_threshold(&self, val: f64) {
+        self.quiet_threshold.store(val.to_bits(), Ordering::Relaxed);
+    }
+
+    pub fn set_histogram_threshold(&self, val: f64) {
+        self.histogram_threshold.store(val.to_bits(), Ordering::Relaxed);
+    }
+
+    /// Snapshot current values as a serializable struct.
+    pub fn snapshot(&self) -> FilterConfigSnapshot {
+        FilterConfigSnapshot {
+            phash_threshold: self.get_phash_threshold(),
+            phash_hash_size: self.get_phash_hash_size(),
+            motion_threshold: self.get_motion_threshold(),
+            quiet_threshold: self.get_quiet_threshold(),
+            histogram_threshold: self.get_histogram_threshold(),
+        }
+    }
+}
+
+impl std::fmt::Debug for LiveFilterParams {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LiveFilterParams")
+            .field("phash_threshold", &self.get_phash_threshold())
+            .field("phash_hash_size", &self.get_phash_hash_size())
+            .field("motion_threshold", &self.get_motion_threshold())
+            .field("quiet_threshold", &self.get_quiet_threshold())
+            .field("histogram_threshold", &self.get_histogram_threshold())
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FilterConfigSnapshot {
+    pub phash_threshold: u32,
+    pub phash_hash_size: u32,
+    pub motion_threshold: f64,
+    pub quiet_threshold: f64,
+    pub histogram_threshold: f64,
 }
 
 #[derive(Debug, Clone, Deserialize)]

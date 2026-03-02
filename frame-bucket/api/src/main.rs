@@ -5,15 +5,18 @@ use aws_credential_types::Credentials;
 use aws_sdk_s3::presigning::PresigningConfig;
 use aws_sdk_s3::primitives::ByteStream;
 use aws_types::region::Region;
+use axum::body::Body;
 use axum::extract::{Path as AxumPath, Query, State};
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Redirect};
+use axum::http::{header, StatusCode};
+use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{delete, get};
 use axum::{Json, Router};
 use frame_bucket_common::config::Config;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
+use tokio::sync::Semaphore;
 use tower_http::cors::{Any, CorsLayer};
+use chrono::Utc;
 use tracing::{error, info, warn};
 
 // ---------------------------------------------------------------------------
@@ -32,6 +35,7 @@ struct AppState {
     aws_s3_bucket: String,
     aws_s3_prefix: String,
     robot_stream_urls: Vec<(String, String)>, // (robot_id, stream_url)
+    stitch_semaphore: Arc<Semaphore>,
 }
 
 // ---------------------------------------------------------------------------
@@ -59,6 +63,12 @@ struct SegmentQuery {
     #[serde(rename = "type")]
     segment_type: Option<String>,
     limit: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BulkDeleteQuery {
+    start_ms: i64,
+    end_ms: i64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -765,6 +775,209 @@ async fn delete_collection(
 }
 
 // ---------------------------------------------------------------------------
+// Handlers — Delete Segment
+// ---------------------------------------------------------------------------
+
+/// DELETE /robots/:robot_id/segments/:id — permanently delete a segment from
+/// RustFS, AWS S3 archive, and the SQLite database.
+async fn delete_segment(
+    State(state): State<Arc<AppState>>,
+    AxumPath((robot_id, id)): AxumPath<(String, i64)>,
+) -> impl IntoResponse {
+    // 1. Look up the segment's s3_key (and verify it exists)
+    let db_dir = state.db_dir.clone();
+    let rid = robot_id.clone();
+    let lookup = tokio::task::spawn_blocking(move || -> rusqlite::Result<Option<String>> {
+        let conn = open_robot_db(&db_dir, &rid)?;
+        let mut stmt =
+            conn.prepare("SELECT s3_key FROM segments WHERE id = ?1 AND robot_id = ?2")?;
+        let mut rows = stmt.query_map(params![id, rid], |row| row.get::<_, String>(0))?;
+        Ok(rows.next().transpose()?)
+    })
+    .await;
+
+    let s3_key = match lookup {
+        Ok(Ok(Some(key))) => key,
+        Ok(Ok(None)) => return StatusCode::NOT_FOUND.into_response(),
+        Ok(Err(e)) => {
+            error!(error = %e, "SQLite lookup failed");
+            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        }
+        Err(e) => {
+            error!(error = %e, "spawn_blocking failed");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
+    let trimmed_key = s3_key.trim_start_matches('/');
+
+    // 2. Delete from RustFS (local/recent storage)
+    if let Err(e) = state
+        .s3_client
+        .delete_object()
+        .bucket(&state.rustfs_bucket)
+        .key(trimmed_key)
+        .send()
+        .await
+    {
+        // Log but don't fail — object may already have been evicted to S3
+        warn!(error = %e, key = trimmed_key, "failed to delete from RustFS (may already be evicted)");
+    } else {
+        info!(key = trimmed_key, "deleted segment from RustFS");
+    }
+
+    // 3. Delete from AWS S3 archive (if it was archived)
+    let aws_key = format!("{}{}", state.aws_s3_prefix, trimmed_key);
+    if let Err(e) = state
+        .aws_s3_client
+        .delete_object()
+        .bucket(&state.aws_s3_bucket)
+        .key(&aws_key)
+        .send()
+        .await
+    {
+        warn!(error = %e, key = aws_key, "failed to delete from AWS S3 archive (may not exist)");
+    } else {
+        info!(key = aws_key, "deleted segment from AWS S3 archive");
+    }
+
+    // 4. Delete from SQLite
+    let db_dir2 = state.db_dir.clone();
+    let rid2 = robot_id.clone();
+    let db_result = tokio::task::spawn_blocking(move || -> rusqlite::Result<usize> {
+        let conn = open_robot_db(&db_dir2, &rid2)?;
+        conn.execute(
+            "DELETE FROM segments WHERE id = ?1 AND robot_id = ?2",
+            params![id, rid2],
+        )
+    })
+    .await;
+
+    match db_result {
+        Ok(Ok(0)) => StatusCode::NOT_FOUND.into_response(),
+        Ok(Ok(_)) => {
+            info!(robot_id, segment_id = id, "segment deleted permanently");
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Ok(Err(e)) => {
+            error!(error = %e, "SQLite delete failed");
+            (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
+        }
+        Err(e) => {
+            error!(error = %e, "spawn_blocking failed");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Handlers — Bulk Delete Segments by Time Range
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Serialize)]
+struct BulkDeleteResponse {
+    deleted: usize,
+}
+
+async fn bulk_delete_segments(
+    State(state): State<Arc<AppState>>,
+    AxumPath(robot_id): AxumPath<String>,
+    Query(q): Query<BulkDeleteQuery>,
+) -> impl IntoResponse {
+    // 1. Look up all segments in the time range
+    let db_dir = state.db_dir.clone();
+    let rid = robot_id.clone();
+    let start = q.start_ms;
+    let end = q.end_ms;
+
+    let lookup = tokio::task::spawn_blocking(move || -> rusqlite::Result<Vec<(i64, String)>> {
+        let conn = open_robot_db(&db_dir, &rid)?;
+        let mut stmt = conn.prepare(
+            "SELECT id, s3_key FROM segments WHERE robot_id = ?1 AND start_ms >= ?2 AND end_ms <= ?3"
+        )?;
+        let rows = stmt.query_map(params![rid, start, end], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?;
+        rows.collect()
+    })
+    .await;
+
+    let segments = match lookup {
+        Ok(Ok(segs)) => segs,
+        Ok(Err(e)) => {
+            error!(error = %e, "SQLite lookup failed for bulk delete");
+            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        }
+        Err(e) => {
+            error!(error = %e, "spawn_blocking failed");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
+    if segments.is_empty() {
+        return Json(BulkDeleteResponse { deleted: 0 }).into_response();
+    }
+
+    let ids: Vec<i64> = segments.iter().map(|(id, _)| *id).collect();
+    info!(robot_id = %robot_id, count = ids.len(), "bulk deleting segments in range {}..{}", q.start_ms, q.end_ms);
+
+    // 2. Delete objects from RustFS and AWS S3 for each segment
+    for (_id, s3_key) in &segments {
+        let trimmed_key = s3_key.trim_start_matches('/');
+
+        if let Err(e) = state
+            .s3_client
+            .delete_object()
+            .bucket(&state.rustfs_bucket)
+            .key(trimmed_key)
+            .send()
+            .await
+        {
+            warn!(error = %e, key = trimmed_key, "bulk delete: failed to delete from RustFS");
+        }
+
+        let aws_key = format!("{}{}", state.aws_s3_prefix, trimmed_key);
+        if let Err(e) = state
+            .aws_s3_client
+            .delete_object()
+            .bucket(&state.aws_s3_bucket)
+            .key(&aws_key)
+            .send()
+            .await
+        {
+            warn!(error = %e, key = aws_key, "bulk delete: failed to delete from AWS S3");
+        }
+    }
+
+    // 3. Bulk delete from SQLite
+    let db_dir2 = state.db_dir.clone();
+    let rid2 = robot_id.clone();
+    let db_result = tokio::task::spawn_blocking(move || -> rusqlite::Result<usize> {
+        let conn = open_robot_db(&db_dir2, &rid2)?;
+        conn.execute(
+            "DELETE FROM segments WHERE robot_id = ?1 AND start_ms >= ?2 AND end_ms <= ?3",
+            params![rid2, start, end],
+        )
+    })
+    .await;
+
+    match db_result {
+        Ok(Ok(count)) => {
+            info!(robot_id, count, "bulk delete completed");
+            Json(BulkDeleteResponse { deleted: count }).into_response()
+        }
+        Ok(Err(e)) => {
+            error!(error = %e, "SQLite bulk delete failed");
+            (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
+        }
+        Err(e) => {
+            error!(error = %e, "spawn_blocking failed");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Handlers — Clips
 // ---------------------------------------------------------------------------
 
@@ -1084,6 +1297,594 @@ struct SegmentInfo {
     end_ms: i64,
     source_key: String,
     size_bytes: Option<i64>,
+}
+
+// ---------------------------------------------------------------------------
+// Download / stitch types & helpers
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+struct DownloadQuery {
+    format: Option<String>, // "zip" or "mp4"
+}
+
+#[derive(Debug)]
+enum StitchError {
+    Db(String),
+    S3Download(String),
+    TempIo(String),
+    FfmpegSpawn(String),
+    FfmpegFailed(String),
+    NoContent,
+}
+
+impl std::fmt::Display for StitchError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StitchError::Db(e) => write!(f, "database error: {e}"),
+            StitchError::S3Download(e) => write!(f, "S3 download error: {e}"),
+            StitchError::TempIo(e) => write!(f, "temp file I/O error: {e}"),
+            StitchError::FfmpegSpawn(e) => write!(f, "failed to spawn ffmpeg: {e}"),
+            StitchError::FfmpegFailed(e) => write!(f, "ffmpeg failed: {e}"),
+            StitchError::NoContent => write!(f, "no downloadable content"),
+        }
+    }
+}
+
+impl IntoResponse for StitchError {
+    fn into_response(self) -> Response {
+        let status = match &self {
+            StitchError::NoContent => StatusCode::BAD_REQUEST,
+            StitchError::Db(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
+        };
+        (status, self.to_string()).into_response()
+    }
+}
+
+async fn run_ffmpeg(args: &[&str]) -> Result<(), StitchError> {
+    let output = tokio::process::Command::new("ffmpeg")
+        .args(args)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| StitchError::FfmpegSpawn(e.to_string()))?
+        .wait_with_output()
+        .await
+        .map_err(|e| StitchError::FfmpegFailed(e.to_string()))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(StitchError::FfmpegFailed(stderr.into_owned()));
+    }
+    Ok(())
+}
+
+/// Returns (width, height, fps) from the first video stream.
+async fn run_ffprobe(path: &Path) -> Result<(u32, u32, f64), StitchError> {
+    let output = tokio::process::Command::new("ffprobe")
+        .args([
+            "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "stream=width,height,r_frame_rate",
+            "-of", "json",
+        ])
+        .arg(path)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .await
+        .map_err(|e| StitchError::FfmpegSpawn(format!("ffprobe: {e}")))?;
+
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .map_err(|e| StitchError::FfmpegFailed(format!("ffprobe parse: {e}")))?;
+
+    let stream = json["streams"]
+        .get(0)
+        .ok_or_else(|| StitchError::FfmpegFailed("no video stream found".into()))?;
+
+    let width = stream["width"].as_u64().unwrap_or(640) as u32;
+    let height = stream["height"].as_u64().unwrap_or(480) as u32;
+
+    // r_frame_rate is like "30/1"
+    let fps_str = stream["r_frame_rate"].as_str().unwrap_or("30/1");
+    let fps = if let Some((n, d)) = fps_str.split_once('/') {
+        let num: f64 = n.parse().unwrap_or(30.0);
+        let den: f64 = d.parse().unwrap_or(1.0);
+        if den > 0.0 { num / den } else { 30.0 }
+    } else {
+        fps_str.parse().unwrap_or(30.0)
+    };
+
+    Ok((width, height, fps))
+}
+
+/// Download a segment file from S3 (try AWS archive first, fall back to RustFS).
+async fn download_segment_file(
+    state: &AppState,
+    s3_key: &str,
+    segment_type: &str,
+    work_dir: &Path,
+    segment_id: i64,
+) -> Result<PathBuf, StitchError> {
+    let trimmed_key = s3_key.trim_start_matches('/');
+    let ext = if segment_type == "active" { "mp4" } else { "jpg" };
+    let local_path = work_dir.join(format!("seg_{segment_id}.{ext}"));
+
+    // Try AWS S3 archive first
+    let aws_key = format!("{}{}", state.aws_s3_prefix, trimmed_key);
+    let data = match state
+        .aws_s3_client
+        .get_object()
+        .bucket(&state.aws_s3_bucket)
+        .key(&aws_key)
+        .send()
+        .await
+    {
+        Ok(output) => output
+            .body
+            .collect()
+            .await
+            .map_err(|e| StitchError::S3Download(e.to_string()))?,
+        Err(_) => {
+            // Fall back to RustFS
+            state
+                .s3_client
+                .get_object()
+                .bucket(&state.rustfs_bucket)
+                .key(trimmed_key)
+                .send()
+                .await
+                .map_err(|e| StitchError::S3Download(format!("not in archive or RustFS: {e}")))?
+                .body
+                .collect()
+                .await
+                .map_err(|e| StitchError::S3Download(e.to_string()))?
+        }
+    };
+
+    tokio::fs::write(&local_path, data.into_bytes())
+        .await
+        .map_err(|e| StitchError::TempIo(e.to_string()))?;
+
+    Ok(local_path)
+}
+
+/// Stitch a single clip's segments into one MP4 file.
+async fn stitch_clip(
+    state: &AppState,
+    clip: &ClipResponse,
+    segments: &[SegmentInfo],
+    work_dir: &Path,
+    clip_index: usize,
+) -> Result<PathBuf, StitchError> {
+    let mut piece_paths: Vec<PathBuf> = Vec::new();
+    let mut piece_index: usize = 0;
+
+    // Find video dimensions from first active segment
+    let mut width = 640u32;
+    let mut height = 480u32;
+    let mut fps = 30.0f64;
+
+    // Download segments and probe first active for resolution
+    let mut first_active_probed = false;
+
+    for seg in segments {
+        // Skip synthetic idle segments
+        if seg.segment_type == "idle"
+            && (seg.source_key.is_empty() || seg.source_key.starts_with("idle:"))
+        {
+            continue;
+        }
+
+        let raw_path = match download_segment_file(
+            state,
+            &seg.source_key,
+            &seg.segment_type,
+            work_dir,
+            seg.segment_id,
+        )
+        .await
+        {
+            Ok(p) => p,
+            Err(e) => {
+                warn!(segment_id = seg.segment_id, error = %e, "skipping unavailable segment");
+                continue;
+            }
+        };
+
+        if seg.segment_type == "active" {
+            // Probe first active segment for dimensions
+            if !first_active_probed {
+                if let Ok((w, h, f)) = run_ffprobe(&raw_path).await {
+                    width = w;
+                    height = h;
+                    fps = f;
+                }
+                first_active_probed = true;
+            }
+
+            // Determine if we need to trim
+            let trim_start_ms = if clip.clip_start_ms > seg.start_ms {
+                clip.clip_start_ms - seg.start_ms
+            } else {
+                0
+            };
+            let seg_duration_ms = seg.end_ms - seg.start_ms;
+            let trim_end_ms = if clip.clip_end_ms < seg.end_ms {
+                clip.clip_end_ms - seg.start_ms
+            } else {
+                seg_duration_ms
+            };
+
+            let needs_trim = trim_start_ms > 0 || trim_end_ms < seg_duration_ms;
+
+            let piece = work_dir.join(format!("piece_{clip_index}_{piece_index:03}.mp4"));
+            if needs_trim {
+                let ss = format!("{:.3}", trim_start_ms as f64 / 1000.0);
+                let to = format!("{:.3}", trim_end_ms as f64 / 1000.0);
+                let input = raw_path.to_str().unwrap();
+                let output = piece.to_str().unwrap();
+                run_ffmpeg(&[
+                    "-i", input, "-ss", &ss, "-to", &to, "-c", "copy",
+                    "-avoid_negative_ts", "make_zero", "-y", output,
+                ])
+                .await?;
+            } else {
+                tokio::fs::rename(&raw_path, &piece)
+                    .await
+                    .map_err(|e| StitchError::TempIo(e.to_string()))?;
+            }
+            piece_paths.push(piece);
+        } else {
+            // Idle segment with real JPEG → 0.5s video
+            let piece = work_dir.join(format!("piece_{clip_index}_{piece_index:03}.mp4"));
+            let input = raw_path.to_str().unwrap();
+            let output = piece.to_str().unwrap();
+            let scale = format!("scale={}:{}", width, height);
+            let fps_str = format!("{:.0}", fps);
+            run_ffmpeg(&[
+                "-loop", "1", "-i", input, "-c:v", "libx264", "-t", "0.5",
+                "-pix_fmt", "yuv420p", "-r", &fps_str, "-vf", &scale, "-y", output,
+            ])
+            .await?;
+            piece_paths.push(piece);
+        }
+        piece_index += 1;
+    }
+
+    if piece_paths.is_empty() {
+        return Err(StitchError::NoContent);
+    }
+
+    if piece_paths.len() == 1 {
+        return Ok(piece_paths.remove(0));
+    }
+
+    // Concat all pieces
+    let concat_path = work_dir.join(format!("concat_{clip_index}.txt"));
+    let mut concat_content = String::new();
+    for p in &piece_paths {
+        concat_content.push_str(&format!("file '{}'\n", p.display()));
+    }
+    tokio::fs::write(&concat_path, &concat_content)
+        .await
+        .map_err(|e| StitchError::TempIo(e.to_string()))?;
+
+    let output = work_dir.join(format!("clip_{clip_index}.mp4"));
+    let concat_input = concat_path.to_str().unwrap();
+    let output_str = output.to_str().unwrap();
+    run_ffmpeg(&[
+        "-f", "concat", "-safe", "0", "-i", concat_input, "-c", "copy",
+        "-movflags", "+faststart", "-y", output_str,
+    ])
+    .await?;
+
+    Ok(output)
+}
+
+/// GET /robots/:robot_id/collections/:collection_id/download?format=zip|mp4
+async fn download_collection(
+    State(state): State<Arc<AppState>>,
+    AxumPath((robot_id, collection_id)): AxumPath<(String, i64)>,
+    Query(q): Query<DownloadQuery>,
+) -> Result<Response, StitchError> {
+    let format = q.format.as_deref().unwrap_or("zip");
+
+    // Acquire semaphore (max 2 concurrent stitch jobs)
+    let _permit = state
+        .stitch_semaphore
+        .acquire()
+        .await
+        .map_err(|_| StitchError::NoContent)?;
+
+    // Step 1: Load clips and segment metadata from DB
+    let db_dir = state.db_dir.clone();
+    let rid = robot_id.clone();
+    let (collection_name, clips, all_segments) = tokio::task::spawn_blocking(move || -> Result<(String, Vec<ClipResponse>, Vec<Vec<SegmentInfo>>), StitchError> {
+        let conn = open_robot_db(&db_dir, &rid)
+            .map_err(|e| StitchError::Db(e.to_string()))?;
+
+        // Get collection name
+        let collection_name: String = conn
+            .query_row(
+                "SELECT name FROM collections WHERE id = ?1 AND robot_id = ?2",
+                params![collection_id, rid],
+                |row| row.get(0),
+            )
+            .map_err(|e| StitchError::Db(format!("collection not found: {e}")))?;
+
+        // Get clips
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, collection_id, robot_id, modality, clip_start_ms, clip_end_ms,
+                        segment_ids, manifest_s3_key, created_at
+                 FROM collection_clips
+                 WHERE collection_id = ?1 AND robot_id = ?2
+                 ORDER BY clip_start_ms ASC",
+            )
+            .map_err(|e| StitchError::Db(e.to_string()))?;
+
+        let clips: Vec<ClipResponse> = stmt
+            .query_map(params![collection_id, rid], |row| {
+                let seg_ids_raw: String = row.get(6)?;
+                let segment_ids: Vec<i64> = serde_json::from_str(&seg_ids_raw).unwrap_or_default();
+                Ok(ClipResponse {
+                    id: row.get(0)?,
+                    collection_id: row.get(1)?,
+                    robot_id: row.get(2)?,
+                    modality: row.get(3)?,
+                    clip_start_ms: row.get(4)?,
+                    clip_end_ms: row.get(5)?,
+                    segment_ids,
+                    manifest_s3_key: row.get(7)?,
+                    created_at: row.get(8)?,
+                })
+            })
+            .map_err(|e| StitchError::Db(e.to_string()))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| StitchError::Db(e.to_string()))?;
+
+        if clips.is_empty() {
+            return Err(StitchError::NoContent);
+        }
+
+        // Get segment metadata for each clip
+        let mut all_segments = Vec::new();
+        for clip in &clips {
+            let mut segments = Vec::new();
+            for seg_id in &clip.segment_ids {
+                let result = conn.query_row(
+                    "SELECT id, type, start_ms, end_ms, s3_key, size_bytes
+                     FROM segments WHERE id = ?1 AND robot_id = ?2",
+                    params![seg_id, rid],
+                    |row| {
+                        Ok(SegmentInfo {
+                            segment_id: row.get(0)?,
+                            segment_type: row.get(1)?,
+                            start_ms: row.get(2)?,
+                            end_ms: row.get(3)?,
+                            source_key: row.get(4)?,
+                            size_bytes: row.get::<_, Option<i64>>(5)?,
+                        })
+                    },
+                );
+                if let Ok(seg) = result {
+                    segments.push(seg);
+                }
+            }
+            all_segments.push(segments);
+        }
+
+        Ok((collection_name, clips, all_segments))
+    })
+    .await
+    .map_err(|e| StitchError::Db(e.to_string()))??;
+
+    // Create temp working directory
+    let job_id = uuid::Uuid::new_v4().to_string();
+    let work_dir = std::env::temp_dir().join(format!("stitch_{job_id}"));
+    tokio::fs::create_dir_all(&work_dir)
+        .await
+        .map_err(|e| StitchError::TempIo(e.to_string()))?;
+
+    // Ensure cleanup on all paths
+    struct CleanupDir(PathBuf);
+    impl Drop for CleanupDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let _cleanup = CleanupDir(work_dir.clone());
+
+    let safe_name = collection_name.replace(' ', "_").replace('/', "-");
+    let mut missing_count = 0u32;
+
+    match format {
+        "mp4" => {
+            // Stitch all clips into MP4(s)
+            let mut stitched_files: Vec<PathBuf> = Vec::new();
+            let mut current_size: u64 = 0;
+            const MAX_PART_BYTES: u64 = 2 * 1024 * 1024 * 1024; // 2 GB
+
+            for (i, (clip, segments)) in clips.iter().zip(all_segments.iter()).enumerate() {
+                let before_count = segments.len();
+                match stitch_clip(&state, clip, segments, &work_dir, i).await {
+                    Ok(path) => {
+                        let meta = tokio::fs::metadata(&path).await.unwrap_or_else(|_| {
+                            // fallback: we'll just add it
+                            std::fs::metadata(&path).unwrap()
+                        });
+                        current_size += meta.len();
+                        stitched_files.push(path);
+
+                        // If we've exceeded the part limit, we'll handle splitting later
+                    }
+                    Err(StitchError::NoContent) => {
+                        missing_count += before_count as u32;
+                        continue;
+                    }
+                    Err(e) => {
+                        warn!(clip_id = clip.id, error = %e, "failed to stitch clip, skipping");
+                        missing_count += 1;
+                        continue;
+                    }
+                }
+            }
+
+            if stitched_files.is_empty() {
+                return Err(StitchError::NoContent);
+            }
+
+            // If only one clip and under 2 GB, return single MP4
+            if stitched_files.len() == 1 && current_size <= MAX_PART_BYTES {
+                let data = tokio::fs::read(&stitched_files[0])
+                    .await
+                    .map_err(|e| StitchError::TempIo(e.to_string()))?;
+                let filename = format!("{safe_name}.mp4");
+                let mut builder = Response::builder()
+                    .header(header::CONTENT_TYPE, "video/mp4")
+                    .header(
+                        header::CONTENT_DISPOSITION,
+                        format!("attachment; filename=\"{filename}\""),
+                    )
+                    .header(header::CONTENT_LENGTH, data.len());
+                if missing_count > 0 {
+                    builder = builder.header("X-Missing-Segments", missing_count.to_string());
+                }
+                return Ok(builder.body(Body::from(data)).unwrap());
+            }
+
+            // Multiple clips or over 2 GB: package as zip
+            // Split into parts if needed
+            let zip_path = work_dir.join(format!("{safe_name}.zip"));
+            let zip_file = std::fs::File::create(&zip_path)
+                .map_err(|e| StitchError::TempIo(e.to_string()))?;
+            let mut zip_writer = zip::ZipWriter::new(zip_file);
+            let options = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
+
+            for (i, path) in stitched_files.iter().enumerate() {
+                let clip = &clips[i.min(clips.len() - 1)];
+                let entry_name = format!(
+                    "clip_{:03}_{}.mp4",
+                    i + 1,
+                    clip.clip_start_ms
+                );
+                let data = tokio::fs::read(path)
+                    .await
+                    .map_err(|e| StitchError::TempIo(e.to_string()))?;
+                zip_writer
+                    .start_file(&entry_name, options)
+                    .map_err(|e| StitchError::TempIo(e.to_string()))?;
+                std::io::Write::write_all(&mut zip_writer, &data)
+                    .map_err(|e| StitchError::TempIo(e.to_string()))?;
+            }
+            zip_writer
+                .finish()
+                .map_err(|e| StitchError::TempIo(e.to_string()))?;
+
+            let data = tokio::fs::read(&zip_path)
+                .await
+                .map_err(|e| StitchError::TempIo(e.to_string()))?;
+            let filename = format!("{safe_name}.zip");
+            let mut builder = Response::builder()
+                .header(header::CONTENT_TYPE, "application/zip")
+                .header(
+                    header::CONTENT_DISPOSITION,
+                    format!("attachment; filename=\"{filename}\""),
+                )
+                .header(header::CONTENT_LENGTH, data.len());
+            if missing_count > 0 {
+                builder = builder.header("X-Missing-Segments", missing_count.to_string());
+            }
+            Ok(builder.body(Body::from(data)).unwrap())
+        }
+
+        _ => {
+            // ZIP mode: download raw segments, package in zip
+            let zip_path = work_dir.join(format!("{safe_name}.zip"));
+            let zip_file = std::fs::File::create(&zip_path)
+                .map_err(|e| StitchError::TempIo(e.to_string()))?;
+            let mut zip_writer = zip::ZipWriter::new(zip_file);
+            let options = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
+
+            let mut file_index = 0usize;
+            for (_clip_idx, segments) in all_segments.iter().enumerate() {
+                for seg in segments {
+                    // Skip synthetic idle segments
+                    if seg.segment_type == "idle"
+                        && (seg.source_key.is_empty() || seg.source_key.starts_with("idle:"))
+                    {
+                        continue;
+                    }
+
+                    let raw_path = match download_segment_file(
+                        &state,
+                        &seg.source_key,
+                        &seg.segment_type,
+                        &work_dir,
+                        seg.segment_id,
+                    )
+                    .await
+                    {
+                        Ok(p) => p,
+                        Err(e) => {
+                            warn!(segment_id = seg.segment_id, error = %e, "skipping unavailable segment");
+                            missing_count += 1;
+                            continue;
+                        }
+                    };
+
+                    let ext = if seg.segment_type == "active" { "mp4" } else { "jpg" };
+                    let entry_name = format!(
+                        "{:03}_{}_{}.{}",
+                        file_index + 1,
+                        seg.segment_type,
+                        seg.start_ms,
+                        ext
+                    );
+
+                    let data = tokio::fs::read(&raw_path)
+                        .await
+                        .map_err(|e| StitchError::TempIo(e.to_string()))?;
+
+                    zip_writer
+                        .start_file(&entry_name, options)
+                        .map_err(|e| StitchError::TempIo(e.to_string()))?;
+                    std::io::Write::write_all(&mut zip_writer, &data)
+                        .map_err(|e| StitchError::TempIo(e.to_string()))?;
+
+                    file_index += 1;
+                }
+            }
+
+            zip_writer
+                .finish()
+                .map_err(|e| StitchError::TempIo(e.to_string()))?;
+
+            if file_index == 0 {
+                return Err(StitchError::NoContent);
+            }
+
+            let data = tokio::fs::read(&zip_path)
+                .await
+                .map_err(|e| StitchError::TempIo(e.to_string()))?;
+            let filename = format!("{safe_name}_segments.zip");
+            let mut builder = Response::builder()
+                .header(header::CONTENT_TYPE, "application/zip")
+                .header(
+                    header::CONTENT_DISPOSITION,
+                    format!("attachment; filename=\"{filename}\""),
+                )
+                .header(header::CONTENT_LENGTH, data.len());
+            if missing_count > 0 {
+                builder = builder.header("X-Missing-Segments", missing_count.to_string());
+            }
+            Ok(builder.body(Body::from(data)).unwrap())
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1431,6 +2232,65 @@ async fn check_tcp_reachable(url: &str) -> bool {
 }
 
 // ---------------------------------------------------------------------------
+// Types & Handler — Questions
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+struct SubmitQuestion {
+    question: String,
+    start_ms: i64,
+    end_ms: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct StoredQuestion {
+    robot_id: String,
+    question: String,
+    start_ms: i64,
+    end_ms: i64,
+    submitted_at: String,
+}
+
+async fn submit_question(
+    State(state): State<Arc<AppState>>,
+    AxumPath(robot_id): AxumPath<String>,
+    Json(body): Json<SubmitQuestion>,
+) -> impl IntoResponse {
+    let question = StoredQuestion {
+        robot_id: robot_id.clone(),
+        question: body.question,
+        start_ms: body.start_ms,
+        end_ms: body.end_ms,
+        submitted_at: Utc::now().to_rfc3339(),
+    };
+
+    let path = state.db_dir.join("questions.json");
+
+    // Read existing questions or start fresh
+    let mut questions: Vec<StoredQuestion> = if path.exists() {
+        match tokio::fs::read_to_string(&path).await {
+            Ok(data) => serde_json::from_str(&data).unwrap_or_default(),
+            Err(_) => vec![],
+        }
+    } else {
+        vec![]
+    };
+
+    questions.push(question);
+
+    match tokio::fs::write(&path, serde_json::to_string_pretty(&questions).unwrap()).await {
+        Ok(_) => {
+            info!(robot_id, "question saved ({} total)", questions.len());
+            (StatusCode::CREATED, Json(serde_json::json!({ "saved": true, "total": questions.len() }))).into_response()
+        }
+        Err(e) => {
+            error!(error = %e, "failed to write questions.json");
+            (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -1502,18 +2362,25 @@ async fn main() {
         aws_s3_bucket: config.aws_s3.bucket.clone(),
         aws_s3_prefix: config.aws_s3.prefix.clone(),
         robot_stream_urls,
+        stitch_semaphore: Arc::new(Semaphore::new(2)),
     });
 
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
-        .allow_headers(Any);
+        .allow_headers(Any)
+        .expose_headers([
+            header::CONTENT_LENGTH,
+            header::CONTENT_DISPOSITION,
+            header::CONTENT_TYPE,
+            "X-Missing-Segments".parse().unwrap(),
+        ]);
 
     let app = Router::new()
         // Segment routes
         .route("/robots", get(list_robots))
-        .route("/robots/:robot_id/segments", get(list_segments))
-        .route("/robots/:robot_id/segments/:id", get(get_segment).patch(patch_labels))
+        .route("/robots/:robot_id/segments", get(list_segments).delete(bulk_delete_segments))
+        .route("/robots/:robot_id/segments/:id", get(get_segment).patch(patch_labels).delete(delete_segment))
         .route("/robots/:robot_id/segments/:id/video", get(video_redirect))
         .route("/robots/:robot_id/segments/:id/image", get(image_proxy))
         // Timeline
@@ -1525,8 +2392,11 @@ async fn main() {
         // Clips
         .route("/robots/:robot_id/collections/:collection_id/clips", get(list_clips).post(create_clip))
         .route("/robots/:robot_id/collections/:collection_id/clips/:clip_id", delete(delete_clip))
-        // Download info
+        // Download
         .route("/robots/:robot_id/collections/:collection_id/download-info", get(download_info))
+        .route("/robots/:robot_id/collections/:collection_id/download", get(download_collection))
+        // Questions
+        .route("/robots/:robot_id/questions", axum::routing::post(submit_question))
         // Health
         .route("/health", get(get_health))
         .route("/health/rustfs", get(browse_rustfs))
