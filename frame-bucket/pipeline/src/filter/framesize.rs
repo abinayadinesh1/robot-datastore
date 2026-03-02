@@ -587,6 +587,8 @@ impl MotionFilter {
                             total_mbs = sps.total_mbs,
                             width_mbs = sps.pic_width_in_mbs,
                             height_mbs = sps.pic_height_in_map_units,
+                            poc_type = sps.pic_order_cnt_type,
+                            log2_max_poc_lsb_minus4 = sps.log2_max_pic_order_cnt_lsb_minus4,
                             "cached SPS"
                         );
                         self.sps = Some(sps);

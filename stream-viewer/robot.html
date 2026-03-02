@@ -389,6 +389,14 @@ async function loadTimeline() {
 }
 
 // ── Scrubber rendering ───────────────────────────────────────────────────
+function formatDuration(ms) {
+  const totalSec = Math.round(ms / 1000);
+  if (totalSec < 60) return totalSec + 's';
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  return s > 0 ? m + 'm ' + s + 's' : m + 'm';
+}
+
 function renderScrubber() {
   $scrubTrack.innerHTML = '';
   const totalMs = vs.rangeEndMs - vs.rangeStartMs;
@@ -397,12 +405,24 @@ function renderScrubber() {
   for (const seg of vs.segments) {
     const left  = ((seg.start_ms - vs.rangeStartMs) / totalMs) * 100;
     const width = ((seg.end_ms - seg.start_ms) / totalMs) * 100;
-    const el = document.createElement('div');
-    el.className = `scrubber-segment ${seg.type}`;
-    el.style.left  = Math.max(0, left) + '%';
-    el.style.width = Math.max(0.2, width) + '%';
-    el.title = `${seg.type} | ${msToTime(seg.start_ms)} - ${msToTime(seg.end_ms)}`;
-    $scrubTrack.appendChild(el);
+
+    if (seg.type === 'active') {
+      const el = document.createElement('div');
+      el.className = 'scrubber-segment active';
+      el.style.left  = Math.max(0, left) + '%';
+      el.style.width = Math.max(0.2, width) + '%';
+      el.title = `${msToTime(seg.start_ms)} - ${msToTime(seg.end_ms)}`;
+      $scrubTrack.appendChild(el);
+    } else {
+      // Idle flag marker
+      const flag = document.createElement('div');
+      flag.className = 'scrubber-idle-flag';
+      flag.style.left = Math.max(0, left) + '%';
+      const dur = seg.end_ms - seg.start_ms;
+      flag.textContent = 'idle: ' + formatDuration(dur);
+      flag.title = `${msToTime(seg.start_ms)} - ${msToTime(seg.end_ms)}`;
+      $scrubTrack.appendChild(flag);
+    }
   }
 }
 
@@ -475,7 +495,22 @@ function seekToTimestamp(ts) {
   if (seg.type === 'active') {
     showVideo(seg, ts);
   } else {
-    showIdleImage(seg);
+    // Scrubbed into an idle gap — snap to the next active segment
+    const nextActive = vs.segments.find((s, i) => i > segIdx && s.type === 'active');
+    if (nextActive) {
+      vs.currentSegmentIdx = vs.segments.indexOf(nextActive);
+      showVideo(nextActive, nextActive.start_ms);
+    } else {
+      // No active segments after this — show last frame of previous active
+      const prevActive = vs.segments.slice(0, segIdx).reverse().find(s => s.type === 'active');
+      if (prevActive) {
+        vs.currentSegmentIdx = vs.segments.indexOf(prevActive);
+        showVideo(prevActive, prevActive.end_ms);
+      } else {
+        $playbackOvText.textContent = 'No video segments';
+        $playbackOverlay.style.display = 'flex';
+      }
+    }
   }
 }
 
@@ -555,34 +590,32 @@ function playFromCurrent() {
   if (!vs.isPlaying || vs.currentSegmentIdx < 0) return;
   const seg = vs.segments[vs.currentSegmentIdx];
 
-  if (seg.type === 'active') {
-    const wasSameSeg = $video.dataset.segId === String(seg.id);
-
-    if (!wasSameSeg) {
-      // New segment — load it and start from the beginning.
-      showVideo(seg, seg.start_ms);
-      $video.addEventListener('canplay', function onReady() {
-        $video.removeEventListener('canplay', onReady);
-        if (vs.isPlaying) {
-          $video.play().catch(e => { if (e.name !== 'AbortError') console.warn('play() error:', e); });
-        }
-      });
-    } else {
-      // Same segment already loaded — play from the current scrubbed position.
-      $video.play().catch(e => { if (e.name !== 'AbortError') console.warn('play() error:', e); });
-    }
-
-    $video.onended = () => advanceToNextSegment(vs.currentSegmentIdx + 1);
-    $video.ontimeupdate = () => {
-      if (!vs.isPlaying) return;
-      const currentTs = seg.start_ms + $video.currentTime * 1000;
-      updateScrubberPosition(currentTs);
-    };
-  } else {
-    showIdleImage(seg);
-    updateScrubberPosition(seg.start_ms);
-    playbackTimer = setTimeout(() => advanceToNextSegment(vs.currentSegmentIdx + 1), 750);
+  // Skip idle segments — jump straight to next active segment
+  if (seg.type !== 'active') {
+    advanceToNextSegment(vs.currentSegmentIdx + 1);
+    return;
   }
+
+  const wasSameSeg = $video.dataset.segId === String(seg.id);
+
+  if (!wasSameSeg) {
+    showVideo(seg, seg.start_ms);
+    $video.addEventListener('canplay', function onReady() {
+      $video.removeEventListener('canplay', onReady);
+      if (vs.isPlaying) {
+        $video.play().catch(e => { if (e.name !== 'AbortError') console.warn('play() error:', e); });
+      }
+    });
+  } else {
+    $video.play().catch(e => { if (e.name !== 'AbortError') console.warn('play() error:', e); });
+  }
+
+  $video.onended = () => advanceToNextSegment(vs.currentSegmentIdx + 1);
+  $video.ontimeupdate = () => {
+    if (!vs.isPlaying) return;
+    const currentTs = seg.start_ms + $video.currentTime * 1000;
+    updateScrubberPosition(currentTs);
+  };
 }
 
 function advanceToNextSegment(nextIdx) {
@@ -619,40 +652,40 @@ function playClipRange() {
   vs.currentSegmentIdx = startIdx;
   const seg = vs.segments[startIdx];
 
-  if (seg.type === 'active') {
-    const seekTs = Math.max(startMs, seg.start_ms);
-    const wasSameSeg = $video.dataset.segId === String(seg.id);
-    showVideo(seg, seekTs);
-
-    const doPlay = () => {
-      $video.play().catch(e => { if (e.name !== 'AbortError') console.warn('play() error:', e); });
-    };
-
-    if (!wasSameSeg) {
-      $video.addEventListener('canplay', function onReady() {
-        $video.removeEventListener('canplay', onReady);
-        if (vs.isPlaying) doPlay();
-      });
-    } else {
-      doPlay();
-    }
-
-    $video.ontimeupdate = () => {
-      if (!vs.isPlaying) return;
-      const currentTs = seg.start_ms + $video.currentTime * 1000;
-      updateScrubberPosition(currentTs);
-      if (currentTs >= endMs) {
-        stopPlayback();
-      } else if (currentTs >= seg.end_ms) {
-        advanceToNextSegment(vs.currentSegmentIdx + 1);
-      }
-    };
-    $video.onended = () => advanceToNextSegment(vs.currentSegmentIdx + 1);
-  } else {
-    showIdleImage(seg);
-    updateScrubberPosition(Math.max(seg.start_ms, startMs));
-    playbackTimer = setTimeout(() => advanceToNextSegment(vs.currentSegmentIdx + 1), 750);
+  // Skip idle segments in clip playback too
+  if (seg.type !== 'active') {
+    advanceToNextSegment(vs.currentSegmentIdx + 1);
+    return;
   }
+
+  const seekTs = Math.max(startMs, seg.start_ms);
+  const wasSameSeg = $video.dataset.segId === String(seg.id);
+  showVideo(seg, seekTs);
+
+  const doPlay = () => {
+    $video.play().catch(e => { if (e.name !== 'AbortError') console.warn('play() error:', e); });
+  };
+
+  if (!wasSameSeg) {
+    $video.addEventListener('canplay', function onReady() {
+      $video.removeEventListener('canplay', onReady);
+      if (vs.isPlaying) doPlay();
+    });
+  } else {
+    doPlay();
+  }
+
+  $video.ontimeupdate = () => {
+    if (!vs.isPlaying) return;
+    const currentTs = seg.start_ms + $video.currentTime * 1000;
+    updateScrubberPosition(currentTs);
+    if (currentTs >= endMs) {
+      stopPlayback();
+    } else if (currentTs >= seg.end_ms) {
+      advanceToNextSegment(vs.currentSegmentIdx + 1);
+    }
+  };
+  $video.onended = () => advanceToNextSegment(vs.currentSegmentIdx + 1);
 }
 
 function updateScrubberPosition(ts) {

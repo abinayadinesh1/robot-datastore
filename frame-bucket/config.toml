@@ -1,13 +1,22 @@
 [[robots]]
-robot_id = "reachy-002"
+robot_id = "reachy-003"
 stream_url = "http://100.107.96.29:8000/api/camera/stream"
-mode = "h264"
+mode = "mjpeg"
 h264_url = "100.107.96.29:9001"
 fps = 30.0
 quality = 80
 label = "Reachy Mini Bedroom"
 webrtc_url = "ws://100.107.96.29:8443"
-peer_id = "reachymini"
+
+[[robots]]
+robot_id = "bracketbot-001"
+stream_url = "http://100.86.32.40:8003/stream"
+mode = "mjpeg"
+h264_url = ""
+fps = 30.0
+quality = 80
+label = "Bracket Bot Bedroom"
+webrtc_url = ""
 
 [filter]
 primary = "framesize"       # "phash", "histogram", or "framesize" (for H.264)

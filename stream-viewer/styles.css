@@ -649,12 +649,12 @@ body.page-robot main {
 /* ── SCRUBBER ─────────────────────────────────────────────────────────────── */
 .scrubber-container {
   width: 100%; max-width: 50vw; position: relative; height: 36px;
-  margin-top: 10px; user-select: none;
+  margin-top: 20px; user-select: none;
 }
 .scrubber-track {
   width: 100%; height: 20px; background: var(--cream2);
   border: 1px solid var(--border); border-radius: 2px;
-  position: relative; overflow: hidden; cursor: pointer;
+  position: relative; overflow: visible; cursor: pointer;
 }
 .scrubber-segment {
   position: absolute; top: 0; height: 100%; border-radius: 1px;
@@ -668,6 +668,27 @@ body.page-robot main {
     45deg, transparent, transparent 3px,
     rgba(250,105,173,0.1) 3px, rgba(250,105,173,0.1) 6px
   );
+}
+.scrubber-idle-flag {
+  position: absolute; top: -16px;
+  transform: translateX(-50%);
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 9px; line-height: 1;
+  color: var(--text-dim);
+  background: var(--cream2);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  padding: 1px 4px;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 4;
+}
+.scrubber-idle-flag::after {
+  content: '';
+  position: absolute; bottom: -4px; left: 50%;
+  transform: translateX(-50%);
+  width: 1px; height: 4px;
+  background: var(--border);
 }
 .scrubber-handle {
   position: absolute; top: -2px; width: 2px; height: 24px;

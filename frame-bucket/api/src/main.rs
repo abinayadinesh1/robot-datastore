@@ -304,7 +304,6 @@ async fn video_redirect(
 
     match result {
         Ok(Ok(Some(s3_key))) => {
-            // Generate a presigned URL so the browser can fetch directly from RustFS
             let presign_config = match PresigningConfig::expires_in(std::time::Duration::from_secs(3600)) {
                 Ok(c) => c,
                 Err(e) => {
@@ -312,17 +311,43 @@ async fn video_redirect(
                     return StatusCode::INTERNAL_SERVER_ERROR.into_response();
                 }
             };
-            let presigned = state
-                .s3_client
-                .get_object()
-                .bucket(&state.rustfs_bucket)
-                .key(s3_key.trim_start_matches('/'))
-                .presigned(presign_config)
-                .await;
+
+            let trimmed_key = s3_key.trim_start_matches('/');
+
+            // Check AWS S3 archive first; fall back to RustFS for recent data.
+            let aws_key = format!("{}{}", state.aws_s3_prefix, trimmed_key);
+            let in_archive = state
+                .aws_s3_client
+                .head_object()
+                .bucket(&state.aws_s3_bucket)
+                .key(&aws_key)
+                .send()
+                .await
+                .is_ok();
+
+            let presigned = if in_archive {
+                state
+                    .aws_s3_client
+                    .get_object()
+                    .bucket(&state.aws_s3_bucket)
+                    .key(&aws_key)
+                    .presigned(presign_config)
+                    .await
+            } else {
+                state
+                    .s3_client
+                    .get_object()
+                    .bucket(&state.rustfs_bucket)
+                    .key(trimmed_key)
+                    .presigned(presign_config)
+                    .await
+            };
+
             match presigned {
                 Ok(req) => {
                     let url = req.uri().to_string();
-                    info!(url, "redirecting to presigned RustFS URL");
+                    let source = if in_archive { "AWS S3 archive" } else { "RustFS" };
+                    info!(url, source, "redirecting to presigned URL");
                     Redirect::temporary(&url).into_response()
                 }
                 Err(e) => {
@@ -376,34 +401,50 @@ async fn image_proxy(
         }
     };
 
-    match state
-        .s3_client
+    let trimmed_key = s3_key.trim_start_matches('/');
+
+    // Try AWS S3 archive first, fall back to RustFS for recently recorded data.
+    let aws_key = format!("{}{}", state.aws_s3_prefix, trimmed_key);
+    let output = match state
+        .aws_s3_client
         .get_object()
-        .bucket(&state.rustfs_bucket)
-        .key(s3_key.trim_start_matches('/'))
+        .bucket(&state.aws_s3_bucket)
+        .key(&aws_key)
         .send()
         .await
     {
-        Ok(output) => {
-            let content_type = output
-                .content_type()
-                .unwrap_or("image/jpeg")
-                .to_string();
-            match output.body.collect().await {
-                Ok(data) => (
-                    [(axum::http::header::CONTENT_TYPE, content_type)],
-                    data.into_bytes(),
-                )
-                    .into_response(),
+        Ok(output) => output,
+        Err(_) => {
+            match state
+                .s3_client
+                .get_object()
+                .bucket(&state.rustfs_bucket)
+                .key(trimmed_key)
+                .send()
+                .await
+            {
+                Ok(output) => output,
                 Err(e) => {
-                    error!(error = %e, "failed to read image body from RustFS");
-                    StatusCode::INTERNAL_SERVER_ERROR.into_response()
+                    error!(error = %e, s3_key, "image not found in AWS S3 archive or RustFS");
+                    return StatusCode::NOT_FOUND.into_response();
                 }
             }
         }
+    };
+
+    let content_type = output
+        .content_type()
+        .unwrap_or("image/jpeg")
+        .to_string();
+    match output.body.collect().await {
+        Ok(data) => (
+            [(axum::http::header::CONTENT_TYPE, content_type)],
+            data.into_bytes(),
+        )
+            .into_response(),
         Err(e) => {
-            error!(error = %e, s3_key, "RustFS get_object failed for image");
-            StatusCode::NOT_FOUND.into_response()
+            error!(error = %e, "failed to read image body");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }
 }
