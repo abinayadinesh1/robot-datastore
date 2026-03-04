@@ -38,7 +38,8 @@ impl SegmentDb {
                 s3_key      TEXT    NOT NULL,
                 size_bytes  INTEGER,
                 frame_count INTEGER,
-                labels      TEXT    DEFAULT '[]'
+                labels      TEXT    DEFAULT '[]',
+                description TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_time
                 ON segments(robot_id, start_ms, end_ms);
@@ -71,6 +72,17 @@ impl SegmentDb {
 
             PRAGMA foreign_keys = ON;",
         )?;
+
+        // Migrate: add `description` column if missing (pre-existing databases).
+        let has_description: bool = conn
+            .prepare("SELECT COUNT(*) FROM pragma_table_info('segments') WHERE name='description'")
+            .and_then(|mut stmt| stmt.query_row([], |row| row.get::<_, i64>(0)))
+            .unwrap_or(0)
+            > 0;
+        if !has_description {
+            conn.execute_batch("ALTER TABLE segments ADD COLUMN description TEXT;")?;
+            info!("migrated segments table: added description column");
+        }
 
         info!(path = db_path.display().to_string(), robot_id, "SQLite database opened");
 
@@ -119,4 +131,14 @@ impl SegmentDb {
         Ok(id)
     }
 
+    /// Update the text description for a segment (called asynchronously after annotation).
+    pub fn update_description(&self, segment_id: i64, description: &str) -> SqlResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE segments SET description = ?1 WHERE id = ?2",
+            params![description, segment_id],
+        )?;
+        debug!(segment_id, "updated segment description");
+        Ok(())
+    }
 }

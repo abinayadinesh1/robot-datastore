@@ -19,6 +19,8 @@ pub struct Config {
     pub database: DatabaseConfig,
     #[serde(default)]
     pub api: ApiConfig,
+    #[serde(default)]
+    pub annotation: Option<AnnotationConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -473,4 +475,24 @@ impl Default for RecordingConfig {
             active_to_idle_consecutive_frames: default_active_to_idle(),
         }
     }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct AnnotationConfig {
+    /// URL of the video annotation API (e.g. Modal VideoChat endpoint).
+    pub url: String,
+    /// Prompt sent to the video model.
+    #[serde(default = "default_annotation_prompt")]
+    pub prompt: String,
+    /// Max number of frames the model should sample from the video.
+    #[serde(default = "default_annotation_max_frames")]
+    pub max_num_frames: u32,
+}
+
+fn default_annotation_prompt() -> String {
+    "Give a detailed description of what goes on in this video.".into()
+}
+
+fn default_annotation_max_frames() -> u32 {
+    128
 }

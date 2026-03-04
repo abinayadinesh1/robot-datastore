@@ -1,3 +1,4 @@
+mod annotator;
 mod capture;
 mod db;
 mod eviction;
@@ -5,7 +6,7 @@ mod filter;
 mod recorder;
 mod storage;
 
-use frame_bucket_common::config::{Config, LiveFilterParams, RobotConfig};
+use frame_bucket_common::config::{AnnotationConfig, Config, LiveFilterParams, RobotConfig};
 use frame_bucket_common::frame::TimestampedFrame;
 use recorder::RecordingStateMachine;
 use std::collections::HashMap;
@@ -91,6 +92,10 @@ async fn main() {
         Arc::clone(&live_params),
     ));
 
+    // Wrap annotation config in Arc for sharing across robot tasks.
+    let annotation_config: Option<Arc<AnnotationConfig>> =
+        config.annotation.clone().map(Arc::new);
+
     // Track running robot pipelines by robot_id
     let mut running: HashMap<String, JoinHandle<()>> = HashMap::new();
 
@@ -103,6 +108,7 @@ async fn main() {
             config.recording.clone(),
             config.database.path.clone(),
             config.rustfs.prefix.clone(),
+            annotation_config.clone(),
         );
         running.insert(robot.robot_id.clone(), handle);
     }
@@ -140,6 +146,7 @@ async fn main() {
                         config.recording.clone(),
                         config.database.path.clone(),
                         config.rustfs.prefix.clone(),
+                        annotation_config.clone(),
                     );
                     running.insert(robot.robot_id.clone(), handle);
                     let _ = reply.send(Ok(()));
@@ -165,9 +172,10 @@ fn spawn_robot_task(
     recording_config: frame_bucket_common::config::RecordingConfig,
     db_path: String,
     rustfs_prefix: String,
+    annotation_config: Option<Arc<AnnotationConfig>>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
-        run_robot_pipeline(robot, rustfs, live_params, recording_config, db_path, rustfs_prefix)
+        run_robot_pipeline(robot, rustfs, live_params, recording_config, db_path, rustfs_prefix, annotation_config)
             .await;
     })
 }
@@ -179,6 +187,7 @@ async fn run_robot_pipeline(
     recording_config: frame_bucket_common::config::RecordingConfig,
     db_path: String,
     rustfs_prefix: String,
+    annotation_config: Option<Arc<AnnotationConfig>>,
 ) {
     let robot_id = robot.robot_id.clone();
     info!(robot_id, mode = robot.mode, stream_url = robot.stream_url, "starting robot pipeline");
@@ -204,6 +213,7 @@ async fn run_robot_pipeline(
         segment_db,
         rustfs_prefix,
         robot_id.clone(),
+        annotation_config,
     );
 
     // Bounded channel for backpressure between capture and processing

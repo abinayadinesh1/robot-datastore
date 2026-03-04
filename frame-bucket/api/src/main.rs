@@ -335,6 +335,28 @@ async fn video_redirect(
                 .await
                 .is_ok();
 
+            let in_rustfs = if !in_archive {
+                state
+                    .s3_client
+                    .head_object()
+                    .bucket(&state.rustfs_bucket)
+                    .key(trimmed_key)
+                    .send()
+                    .await
+                    .is_ok()
+            } else {
+                false
+            };
+
+            if !in_archive && !in_rustfs {
+                warn!(
+                    s3_key = trimmed_key,
+                    aws_key,
+                    "segment file not found in AWS S3 archive or RustFS"
+                );
+                return (StatusCode::NOT_FOUND, "segment file not found in any storage backend").into_response();
+            }
+
             let presigned = if in_archive {
                 state
                     .aws_s3_client

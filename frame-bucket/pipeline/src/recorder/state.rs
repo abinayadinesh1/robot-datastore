@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use frame_bucket_common::config::{LiveFilterParams, RecordingConfig};
+use frame_bucket_common::config::{AnnotationConfig, LiveFilterParams, RecordingConfig};
 use frame_bucket_common::frame::{FramePayload, TimestampedFrame};
 use tokio::time::Instant;
 use tracing::{debug, error, info, warn};
@@ -12,6 +12,7 @@ use crate::filter::phash::{compute_ahash, hamming};
 use crate::storage::RustfsStorage;
 
 use super::encoder::SegmentEncoder;
+use super::fps::FpsEstimator;
 use super::keys::{active_segment_key, idle_jpeg_key};
 
 #[allow(dead_code)]
@@ -57,6 +58,12 @@ pub struct RecordingStateMachine {
     /// Counts frames spent in the current state (reset on transitions).
     /// Used to throttle debug logging to every 100 frames.
     frames_in_current_state: u64,
+    /// Estimates the actual FPS from incoming frame timestamps so the encoder
+    /// produces correctly-timed video regardless of the stream's real rate.
+    fps_estimator: FpsEstimator,
+    /// Optional video annotation config. When present, completed segments are
+    /// sent to the annotation API asynchronously.
+    annotation_config: Option<Arc<AnnotationConfig>>,
 }
 
 impl RecordingStateMachine {
@@ -67,8 +74,11 @@ impl RecordingStateMachine {
         db: Option<Arc<SegmentDb>>,
         prefix: String,
         robot_id: String,
+        annotation_config: Option<Arc<AnnotationConfig>>,
     ) -> Self {
         let motion_filter = MotionFilter::new(Arc::clone(&live_params));
+        // Use a 60-frame sliding window; fall back to config fps until we have enough samples.
+        let fps_estimator = FpsEstimator::new(60, config.fps);
         Self {
             state: None,
             config,
@@ -79,11 +89,16 @@ impl RecordingStateMachine {
             robot_id,
             motion_filter,
             frames_in_current_state: 0,
+            fps_estimator,
+            annotation_config,
         }
     }
 
     /// Process one incoming frame. This is the main entry point.
     pub async fn process_frame(&mut self, frame: &TimestampedFrame) {
+        // Track arrival timestamps so we can estimate the real stream FPS.
+        self.fps_estimator.push(frame.captured_at_ms);
+
         match &frame.payload {
             FramePayload::Jpeg(jpeg_data) => {
                 self.process_jpeg_frame(frame, jpeg_data).await;
@@ -322,12 +337,14 @@ impl RecordingStateMachine {
         jpeg_data: &[u8],
         hash: Vec<bool>,
     ) -> Option<RecordingState> {
+        let estimated_fps = self.fps_estimator.fps();
+        info!(estimated_fps, config_fps = self.config.fps, "JPEG segment using estimated FPS");
         let mut encoder = match SegmentEncoder::start(
             frame.captured_at_ms,
             &self.config.codec,
             self.config.crf,
             &self.config.preset,
-            self.config.fps,
+            estimated_fps,
         )
         .await
         {
@@ -549,8 +566,10 @@ impl RecordingStateMachine {
         frame: &TimestampedFrame,
         h264_data: &[u8],
     ) -> Option<RecordingState> {
+        let estimated_fps = self.fps_estimator.fps();
+        info!(estimated_fps, config_fps = self.config.fps, "H.264 segment using estimated FPS");
         let mut encoder =
-            match SegmentEncoder::start_passthrough(frame.captured_at_ms, self.config.fps).await {
+            match SegmentEncoder::start_passthrough(frame.captured_at_ms, estimated_fps).await {
                 Ok(e) => e,
                 Err(e) => {
                     error!(error = %e, "failed to spawn ffmpeg passthrough");
@@ -606,14 +625,29 @@ impl RecordingStateMachine {
                             "uploaded active segment to RustFS"
                         );
                         if let Some(db) = &self.db {
-                            if let Err(e) = db.insert_active(
+                            match db.insert_active(
                                 start_ms,
                                 end_ms,
                                 &key,
                                 size_bytes,
                                 seg.frame_count,
                             ) {
-                                error!(error = %e, key, "failed to insert active segment into SQLite");
+                                Ok(segment_id) => {
+                                    if let Some(ann) = &self.annotation_config {
+                                        crate::annotator::spawn_annotation(
+                                            Arc::clone(ann),
+                                            Arc::clone(&self.storage),
+                                            Arc::clone(db),
+                                            segment_id,
+                                            key.clone(),
+                                            start_ms,
+                                            end_ms,
+                                        );
+                                    }
+                                }
+                                Err(e) => {
+                                    error!(error = %e, key, "failed to insert active segment into SQLite");
+                                }
                             }
                         }
                     }
@@ -645,6 +679,7 @@ impl RecordingStateMachine {
                 if let Err(e) = db.insert_idle(idle_start_ms, idle_end_ms, &key, 0) {
                     error!(error = %e, "failed to insert H.264 idle record into SQLite");
                 }
+                // No annotation for H.264 idle — no stored object to send to the model.
             }
             return;
         }
@@ -662,10 +697,23 @@ impl RecordingStateMachine {
                     idle_start_ms, idle_end_ms, "uploaded idle frame to RustFS"
                 );
                 if let Some(db) = &self.db {
-                    if let Err(e) =
-                        db.insert_idle(idle_start_ms, idle_end_ms, &jpeg_key, jpeg_size)
-                    {
-                        error!(error = %e, key = jpeg_key, "failed to insert idle record into SQLite");
+                    match db.insert_idle(idle_start_ms, idle_end_ms, &jpeg_key, jpeg_size) {
+                        Ok(segment_id) => {
+                            if let Some(ann) = &self.annotation_config {
+                                crate::annotator::spawn_annotation(
+                                    Arc::clone(ann),
+                                    Arc::clone(&self.storage),
+                                    Arc::clone(db),
+                                    segment_id,
+                                    jpeg_key.clone(),
+                                    idle_start_ms,
+                                    idle_end_ms,
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            error!(error = %e, key = jpeg_key, "failed to insert idle record into SQLite");
+                        }
                     }
                 }
             }
