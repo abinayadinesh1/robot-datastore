@@ -24,7 +24,7 @@ import hmac
 import os
 import sqlite3
 import sys
-import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote, urlparse
@@ -311,31 +311,38 @@ def main():
 
     annotated = 0
     failed = 0
+    max_workers = 4
 
-    for i, row in enumerate(rows, 1):
+    def process_row(idx, row):
         seg_id = row["id"]
         s3_key = row["s3_key"]
         start_ms = row["start_ms"]
         end_ms = row["end_ms"]
         seg_type = row["type"]
 
-        print(f"\n[{i}/{len(rows)}] segment {seg_id} ({seg_type}) {format_ms(start_ms)} -> {format_ms(end_ms)}")
+        print(f"\n[{idx}/{len(rows)}] segment {seg_id} ({seg_type}) {format_ms(start_ms)} -> {format_ms(end_ms)}")
 
         description = annotate_segment(s3_key, start_ms, end_ms, seg_type, args.api_url)
-        if description:
-            conn.execute(
-                "UPDATE segments SET description = ? WHERE id = ?",
-                (description, seg_id),
-            )
-            conn.commit()
-            print(f"  saved ({len(description)} chars)")
-            annotated += 1
-        else:
-            failed += 1
+        return seg_id, description
 
-        # Brief pause between API calls to avoid overwhelming the endpoint.
-        if i < len(rows):
-            time.sleep(0.5)
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(process_row, i, row): row
+            for i, row in enumerate(rows, 1)
+        }
+
+        for future in as_completed(futures):
+            seg_id, description = future.result()
+            if description:
+                conn.execute(
+                    "UPDATE segments SET description = ? WHERE id = ?",
+                    (description, seg_id),
+                )
+                conn.commit()
+                print(f"  seg {seg_id}: saved ({len(description)} chars)")
+                annotated += 1
+            else:
+                failed += 1
 
     print(f"\nDone. Annotated: {annotated}, Failed/Skipped: {failed}")
     conn.close()
