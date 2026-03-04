@@ -202,6 +202,11 @@ def annotate_segment(
         print(f"  skipping (no stored object): {s3_key}")
         return None
 
+    # Skip idle JPEG frames — the video model can't process still images.
+    if seg_type == "idle" or s3_key.endswith(".jpg") or s3_key.endswith(".jpeg"):
+        print(f"  skipping (JPEG idle frame, video model requires video): {s3_key}")
+        return None
+
     # Download from RustFS, fall back to AWS S3.
     data, source = download_object(s3_key)
     if data is None:

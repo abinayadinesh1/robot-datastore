@@ -697,24 +697,10 @@ impl RecordingStateMachine {
                     idle_start_ms, idle_end_ms, "uploaded idle frame to RustFS"
                 );
                 if let Some(db) = &self.db {
-                    match db.insert_idle(idle_start_ms, idle_end_ms, &jpeg_key, jpeg_size) {
-                        Ok(segment_id) => {
-                            if let Some(ann) = &self.annotation_config {
-                                crate::annotator::spawn_annotation(
-                                    Arc::clone(ann),
-                                    Arc::clone(&self.storage),
-                                    Arc::clone(db),
-                                    segment_id,
-                                    jpeg_key.clone(),
-                                    idle_start_ms,
-                                    idle_end_ms,
-                                );
-                            }
-                        }
-                        Err(e) => {
-                            error!(error = %e, key = jpeg_key, "failed to insert idle record into SQLite");
-                        }
+                    if let Err(e) = db.insert_idle(idle_start_ms, idle_end_ms, &jpeg_key, jpeg_size) {
+                        error!(error = %e, key = jpeg_key, "failed to insert idle record into SQLite");
                     }
+                    // No annotation for idle JPEGs — the video model cannot process still images.
                 }
             }
             Err(e) => {
