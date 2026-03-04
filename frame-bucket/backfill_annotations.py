@@ -3,10 +3,12 @@
 Backfill video annotations for all segments of a robot.
 
 Reads the SQLite database for a robot, finds segments missing descriptions,
-downloads each from RustFS, sends to the Modal VideoChat API, and writes
-the description back.
+downloads each from RustFS (falling back to AWS S3 for evicted objects),
+sends to the Modal VideoChat API, and writes the description back.
 
 Dependencies: requests (+ stdlib only, no boto3)
+
+AWS S3 fallback requires env vars: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
 
 Usage:
     python backfill_annotations.py                          # defaults: reachy-003
@@ -19,12 +21,13 @@ Usage:
 import argparse
 import hashlib
 import hmac
+import os
 import sqlite3
 import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 import requests
 
@@ -35,6 +38,11 @@ RUSTFS_ACCESS_KEY = "rustfsadmin"
 RUSTFS_SECRET_KEY = "rustfsadmin"
 RUSTFS_BUCKET = "camera-frames"
 RUSTFS_REGION = "us-east-1"
+
+# AWS S3 archive (evicted objects land here with the same key)
+AWS_S3_BUCKET = "reachy-mini-frames-archive"
+AWS_S3_PREFIX = ""  # matches config.toml [aws_s3] prefix
+AWS_S3_REGION = "us-west-2"
 
 DB_DIR = Path(__file__).parent / "data"
 ROBOT_ID = "reachy-003"
@@ -60,20 +68,24 @@ def _get_signature_key(secret: str, date_stamp: str, region: str, service: str) 
     return k_signing
 
 
-def s3_get_object(s3_key: str) -> bytes:
-    """Download an object from RustFS using AWS Signature V4 (no boto3)."""
-    from urllib.parse import urlparse
-
-    parsed = urlparse(RUSTFS_ENDPOINT)
+def _s3v4_get(
+    endpoint: str,
+    bucket: str,
+    key: str,
+    access_key: str,
+    secret_key: str,
+    region: str,
+    timeout: int = 120,
+) -> requests.Response:
+    """Perform an S3 GET with AWS Signature V4 signing."""
+    parsed = urlparse(endpoint)
     host = parsed.netloc
 
     now = datetime.now(timezone.utc)
     amz_date = now.strftime("%Y%m%dT%H%M%SZ")
     date_stamp = now.strftime("%Y%m%d")
 
-    # Path-style: /{bucket}/{key}
-    canonical_uri = "/" + RUSTFS_BUCKET + "/" + quote(s3_key, safe="/")
-
+    canonical_uri = "/" + bucket + "/" + quote(key, safe="/")
     canonical_querystring = ""
     payload_hash = hashlib.sha256(b"").hexdigest()
 
@@ -89,30 +101,84 @@ def s3_get_object(s3_key: str) -> bytes:
         f"{canonical_headers}\n{signed_headers}\n{payload_hash}"
     )
 
-    credential_scope = f"{date_stamp}/{RUSTFS_REGION}/s3/aws4_request"
+    credential_scope = f"{date_stamp}/{region}/s3/aws4_request"
     string_to_sign = (
         f"AWS4-HMAC-SHA256\n{amz_date}\n{credential_scope}\n"
         + hashlib.sha256(canonical_request.encode("utf-8")).hexdigest()
     )
 
-    signing_key = _get_signature_key(RUSTFS_SECRET_KEY, date_stamp, RUSTFS_REGION, "s3")
-    signature = hmac.new(signing_key, string_to_sign.encode("utf-8"), hashlib.sha256).hexdigest()
+    signing_key = _get_signature_key(secret_key, date_stamp, region, "s3")
+    signature = hmac.new(
+        signing_key, string_to_sign.encode("utf-8"), hashlib.sha256
+    ).hexdigest()
 
     authorization = (
-        f"AWS4-HMAC-SHA256 Credential={RUSTFS_ACCESS_KEY}/{credential_scope}, "
+        f"AWS4-HMAC-SHA256 Credential={access_key}/{credential_scope}, "
         f"SignedHeaders={signed_headers}, Signature={signature}"
     )
 
-    url = f"{RUSTFS_ENDPOINT}/{RUSTFS_BUCKET}/{quote(s3_key, safe='/')}"
+    url = f"{endpoint}/{bucket}/{quote(key, safe='/')}"
     headers = {
         "x-amz-date": amz_date,
         "x-amz-content-sha256": payload_hash,
         "Authorization": authorization,
     }
 
-    resp = requests.get(url, headers=headers, timeout=120)
-    resp.raise_for_status()
-    return resp.content
+    return requests.get(url, headers=headers, timeout=timeout)
+
+
+# ── Download helpers ───────────────────────────────────────────────────────────
+
+def download_from_rustfs(s3_key: str) -> bytes | None:
+    """Try downloading from RustFS. Returns None on 404/error."""
+    try:
+        resp = _s3v4_get(
+            RUSTFS_ENDPOINT, RUSTFS_BUCKET, s3_key,
+            RUSTFS_ACCESS_KEY, RUSTFS_SECRET_KEY, RUSTFS_REGION,
+        )
+        if resp.status_code == 404 or resp.status_code == 403:
+            return None
+        resp.raise_for_status()
+        return resp.content
+    except requests.RequestException:
+        return None
+
+
+def download_from_aws_s3(s3_key: str) -> bytes | None:
+    """Try downloading from AWS S3 archive. Returns None if creds missing or error."""
+    aws_access = os.environ.get("AWS_ACCESS_KEY_ID", "")
+    aws_secret = os.environ.get("AWS_SECRET_ACCESS_KEY", "")
+    if not aws_access or not aws_secret:
+        return None
+
+    # Eviction stores with: aws_key = f"{aws_config.prefix}{key}"
+    aws_key = f"{AWS_S3_PREFIX}{s3_key}"
+    endpoint = f"https://s3.{AWS_S3_REGION}.amazonaws.com"
+
+    try:
+        resp = _s3v4_get(
+            endpoint, AWS_S3_BUCKET, aws_key,
+            aws_access, aws_secret, AWS_S3_REGION,
+        )
+        if resp.status_code == 404 or resp.status_code == 403:
+            return None
+        resp.raise_for_status()
+        return resp.content
+    except requests.RequestException:
+        return None
+
+
+def download_object(s3_key: str) -> tuple[bytes | None, str]:
+    """Download from RustFS, falling back to AWS S3. Returns (data, source)."""
+    data = download_from_rustfs(s3_key)
+    if data is not None:
+        return data, "rustfs"
+
+    data = download_from_aws_s3(s3_key)
+    if data is not None:
+        return data, "aws-s3"
+
+    return None, "none"
 
 
 # ── Core logic ─────────────────────────────────────────────────────────────────
@@ -129,21 +195,20 @@ def format_ms(ms: int) -> str:
 def annotate_segment(
     s3_key: str, start_ms: int, end_ms: int, seg_type: str, api_url: str
 ) -> str | None:
-    """Download segment from RustFS, send to annotation API, return description."""
+    """Download segment, send to annotation API, return description."""
 
     # Skip pseudo-keys for H.264 idle periods (no actual object stored).
     if s3_key.startswith("idle:"):
         print(f"  skipping (no stored object): {s3_key}")
         return None
 
-    # Download from RustFS.
-    try:
-        data = s3_get_object(s3_key)
-    except Exception as e:
-        print(f"  ERROR downloading {s3_key}: {e}")
+    # Download from RustFS, fall back to AWS S3.
+    data, source = download_object(s3_key)
+    if data is None:
+        print(f"  ERROR: not found in RustFS or AWS S3: {s3_key}")
         return None
 
-    print(f"  downloaded {len(data)} bytes from {s3_key}")
+    print(f"  downloaded {len(data)} bytes from {source}: {s3_key}")
 
     # Determine MIME type from key.
     filename = s3_key.rsplit("/", 1)[-1]
@@ -191,6 +256,13 @@ def main():
     parser.add_argument("--type", choices=["active", "idle", "all"], default="all", help="Segment type filter")
     parser.add_argument("--api-url", default=ANNOTATION_API_URL, help="Annotation API URL")
     args = parser.parse_args()
+
+    # Check AWS S3 fallback availability.
+    has_aws = bool(os.environ.get("AWS_ACCESS_KEY_ID")) and bool(os.environ.get("AWS_SECRET_ACCESS_KEY"))
+    if has_aws:
+        print(f"AWS S3 fallback enabled (bucket: {AWS_S3_BUCKET}, region: {AWS_S3_REGION})")
+    else:
+        print("AWS S3 fallback disabled (set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY to enable)")
 
     db_path = Path(args.db_dir) / f"{args.robot_id}.db"
     if not db_path.exists():
