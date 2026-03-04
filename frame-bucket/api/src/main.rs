@@ -1575,7 +1575,9 @@ async fn stitch_clip(
     let concat_input = concat_path.to_str().unwrap();
     let output_str = output.to_str().unwrap();
     run_ffmpeg(&[
-        "-f", "concat", "-safe", "0", "-i", concat_input, "-c", "copy",
+        "-f", "concat", "-safe", "0", "-i", concat_input,
+        "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+        "-pix_fmt", "yuv420p",
         "-movflags", "+faststart", "-y", output_str,
     ])
     .await?;
