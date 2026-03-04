@@ -6,6 +6,8 @@ Reads the SQLite database for a robot, finds segments missing descriptions,
 downloads each from RustFS, sends to the Modal VideoChat API, and writes
 the description back.
 
+Dependencies: requests (+ stdlib only, no boto3)
+
 Usage:
     python backfill_annotations.py                          # defaults: reachy-003
     python backfill_annotations.py --robot-id reachy-003
@@ -15,15 +17,16 @@ Usage:
 """
 
 import argparse
+import hashlib
+import hmac
 import sqlite3
 import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import quote
 
-import boto3
 import requests
-from botocore.config import Config as BotoConfig
 
 # ── Defaults (match config.toml) ───────────────────────────────────────────────
 
@@ -31,6 +34,7 @@ RUSTFS_ENDPOINT = "http://100.81.222.59:9000"
 RUSTFS_ACCESS_KEY = "rustfsadmin"
 RUSTFS_SECRET_KEY = "rustfsadmin"
 RUSTFS_BUCKET = "camera-frames"
+RUSTFS_REGION = "us-east-1"
 
 DB_DIR = Path(__file__).parent / "data"
 ROBOT_ID = "reachy-003"
@@ -42,6 +46,77 @@ ANNOTATION_PROMPT = "Give a detailed description of what goes on in this video."
 MAX_NUM_FRAMES = 128
 
 
+# ── Minimal S3v4 signer (stdlib only) ─────────────────────────────────────────
+
+def _sign(key: bytes, msg: str) -> bytes:
+    return hmac.new(key, msg.encode("utf-8"), hashlib.sha256).digest()
+
+
+def _get_signature_key(secret: str, date_stamp: str, region: str, service: str) -> bytes:
+    k_date = _sign(("AWS4" + secret).encode("utf-8"), date_stamp)
+    k_region = _sign(k_date, region)
+    k_service = _sign(k_region, service)
+    k_signing = _sign(k_service, "aws4_request")
+    return k_signing
+
+
+def s3_get_object(s3_key: str) -> bytes:
+    """Download an object from RustFS using AWS Signature V4 (no boto3)."""
+    from urllib.parse import urlparse
+
+    parsed = urlparse(RUSTFS_ENDPOINT)
+    host = parsed.netloc
+
+    now = datetime.now(timezone.utc)
+    amz_date = now.strftime("%Y%m%dT%H%M%SZ")
+    date_stamp = now.strftime("%Y%m%d")
+
+    # Path-style: /{bucket}/{key}
+    canonical_uri = "/" + RUSTFS_BUCKET + "/" + quote(s3_key, safe="/")
+
+    canonical_querystring = ""
+    payload_hash = hashlib.sha256(b"").hexdigest()
+
+    canonical_headers = (
+        f"host:{host}\n"
+        f"x-amz-content-sha256:{payload_hash}\n"
+        f"x-amz-date:{amz_date}\n"
+    )
+    signed_headers = "host;x-amz-content-sha256;x-amz-date"
+
+    canonical_request = (
+        f"GET\n{canonical_uri}\n{canonical_querystring}\n"
+        f"{canonical_headers}\n{signed_headers}\n{payload_hash}"
+    )
+
+    credential_scope = f"{date_stamp}/{RUSTFS_REGION}/s3/aws4_request"
+    string_to_sign = (
+        f"AWS4-HMAC-SHA256\n{amz_date}\n{credential_scope}\n"
+        + hashlib.sha256(canonical_request.encode("utf-8")).hexdigest()
+    )
+
+    signing_key = _get_signature_key(RUSTFS_SECRET_KEY, date_stamp, RUSTFS_REGION, "s3")
+    signature = hmac.new(signing_key, string_to_sign.encode("utf-8"), hashlib.sha256).hexdigest()
+
+    authorization = (
+        f"AWS4-HMAC-SHA256 Credential={RUSTFS_ACCESS_KEY}/{credential_scope}, "
+        f"SignedHeaders={signed_headers}, Signature={signature}"
+    )
+
+    url = f"{RUSTFS_ENDPOINT}/{RUSTFS_BUCKET}/{quote(s3_key, safe='/')}"
+    headers = {
+        "x-amz-date": amz_date,
+        "x-amz-content-sha256": payload_hash,
+        "Authorization": authorization,
+    }
+
+    resp = requests.get(url, headers=headers, timeout=120)
+    resp.raise_for_status()
+    return resp.content
+
+
+# ── Core logic ─────────────────────────────────────────────────────────────────
+
 def format_ms(ms: int) -> str:
     """Format millisecond timestamp as a human-readable UTC string."""
     try:
@@ -51,19 +126,8 @@ def format_ms(ms: int) -> str:
         return str(ms)
 
 
-def get_s3_client():
-    return boto3.client(
-        "s3",
-        endpoint_url=RUSTFS_ENDPOINT,
-        aws_access_key_id=RUSTFS_ACCESS_KEY,
-        aws_secret_access_key=RUSTFS_SECRET_KEY,
-        region_name="us-east-1",
-        config=BotoConfig(signature_version="s3v4"),
-    )
-
-
 def annotate_segment(
-    s3, s3_key: str, start_ms: int, end_ms: int, seg_type: str
+    s3_key: str, start_ms: int, end_ms: int, seg_type: str, api_url: str
 ) -> str | None:
     """Download segment from RustFS, send to annotation API, return description."""
 
@@ -74,8 +138,7 @@ def annotate_segment(
 
     # Download from RustFS.
     try:
-        resp = s3.get_object(Bucket=RUSTFS_BUCKET, Key=s3_key)
-        data = resp["Body"].read()
+        data = s3_get_object(s3_key)
     except Exception as e:
         print(f"  ERROR downloading {s3_key}: {e}")
         return None
@@ -83,17 +146,16 @@ def annotate_segment(
     print(f"  downloaded {len(data)} bytes from {s3_key}")
 
     # Determine MIME type from key.
+    filename = s3_key.rsplit("/", 1)[-1]
     if s3_key.endswith(".jpg") or s3_key.endswith(".jpeg"):
         mime = "image/jpeg"
-        filename = s3_key.rsplit("/", 1)[-1]
     else:
         mime = "video/mp4"
-        filename = s3_key.rsplit("/", 1)[-1]
 
     # POST to annotation API.
     try:
         api_resp = requests.post(
-            ANNOTATION_API_URL,
+            api_url,
             files={"file": (filename, data, mime)},
             data={
                 "question": ANNOTATION_PROMPT,
@@ -171,11 +233,10 @@ def main():
             start_fmt = format_ms(row["start_ms"])
             end_fmt = format_ms(row["end_ms"])
             size_kb = (row["size_bytes"] or 0) / 1024
-            print(f"  [{row['id']}] {row['type']:6s}  {start_fmt} → {end_fmt}  {size_kb:.0f}KB  {row['s3_key']}")
+            print(f"  [{row['id']}] {row['type']:6s}  {start_fmt} -> {end_fmt}  {size_kb:.0f}KB  {row['s3_key']}")
         print(f"\nDry run complete. Use without --dry-run to annotate.")
         return
 
-    s3 = get_s3_client()
     annotated = 0
     failed = 0
 
@@ -186,16 +247,16 @@ def main():
         end_ms = row["end_ms"]
         seg_type = row["type"]
 
-        print(f"\n[{i}/{len(rows)}] segment {seg_id} ({seg_type}) {format_ms(start_ms)} → {format_ms(end_ms)}")
+        print(f"\n[{i}/{len(rows)}] segment {seg_id} ({seg_type}) {format_ms(start_ms)} -> {format_ms(end_ms)}")
 
-        description = annotate_segment(s3, s3_key, start_ms, end_ms, seg_type)
+        description = annotate_segment(s3_key, start_ms, end_ms, seg_type, args.api_url)
         if description:
             conn.execute(
                 "UPDATE segments SET description = ? WHERE id = ?",
                 (description, seg_id),
             )
             conn.commit()
-            print(f"  ✓ saved ({len(description)} chars)")
+            print(f"  saved ({len(description)} chars)")
             annotated += 1
         else:
             failed += 1
