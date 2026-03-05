@@ -2398,7 +2398,7 @@ async fn main() {
         stitch_semaphore: Arc::new(Semaphore::new(2)),
         llm_client: llm_client::LlmClient::new(
             std::env::var("LLM_BASE_URL").unwrap_or_else(|_| {
-                "https://abinayadinesh1--example-vllm-inference-serve-dev.modal.run".to_string()
+                "https://abinayadinesh1--example-vllm-inference-serve.modal.run".to_string()
             }),
             std::env::var("LLM_MODEL").unwrap_or_else(|_| "llm".to_string()),
             std::env::var("VIDEO_LLM_BASE_URL").unwrap_or_else(|_| {
