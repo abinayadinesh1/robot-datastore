@@ -379,7 +379,10 @@ function createTile(stream,idx){
       <div class="status-cline-v"></div>
     </div>
     <span class="status-text">Acquiring</span>`;
-  const video=document.createElement('video');video.autoplay=true;video.playsInline=true;video.muted=true;
+  const video=document.createElement('video');
+  video.autoplay=true;
+  video.playsInline=true;
+  video.muted=true;
   body.appendChild(overlay);body.appendChild(video);
 
   const footer=document.createElement('div');footer.className='tile-footer';

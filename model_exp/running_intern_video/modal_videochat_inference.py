@@ -55,8 +55,9 @@ API_PORT = 8000
     scaledown_window=15 * MINUTES,
     timeout=10 * MINUTES,
     volumes={"/root/.cache/huggingface": hf_cache_vol},
+    max_containers=2,
 )
-@modal.concurrent(max_inputs=4)  # video inference is heavy, keep this low
+@modal.concurrent(max_inputs=8)
 class VideoChatModel:
     @modal.enter()
     def load_model(self):

@@ -99,6 +99,10 @@
         <input type="text" id="question-input" class="question-input" placeholder="Ask about this time interval...">
         <button class="btn-primary-sm" id="btn-submit-question" disabled>Submit</button>
       </div>
+      <div id="qa-progress" style="display:none; margin-top:8px; padding:12px 16px; border:1px solid var(--border); border-radius:4px; background:var(--cream); font-family:'IBM Plex Mono',monospace; font-size:13px;">
+        <div id="qa-status" style="color:var(--text-dim); margin-bottom:4px;"></div>
+        <div id="qa-answer" style="display:none; margin-top:8px; padding:12px; border:1px solid var(--border-hi); border-radius:4px; background:white; line-height:1.6;"></div>
+      </div>
     </div>
 
     <!-- Calendar overlay -->
@@ -1481,45 +1485,106 @@ function updateQuestionState() {
   $btnSubmitQ.disabled = !(range && hasText);
 }
 
-$btnSubmitQ.addEventListener('click', async () => {
+$btnSubmitQ.addEventListener('click', () => {
   const question = $questionInput.value.trim();
   const range = getQuestionRange();
   if (!question || !range) return;
 
   $btnSubmitQ.disabled = true;
-  $btnSubmitQ.textContent = 'Submitting...';
+  $btnSubmitQ.textContent = 'Thinking...';
 
-  try {
-    const resp = await fetch(`${apiBase}/robots/${robotId}/questions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        question,
-        start_ms: range.startMs,
-        end_ms: range.endMs,
-      }),
-    });
-    if (!resp.ok) {
-      const msg = await resp.text();
-      alert('Error: ' + msg);
-      return;
+  const $progress = document.getElementById('qa-progress');
+  const $status   = document.getElementById('qa-status');
+  const $answer   = document.getElementById('qa-answer');
+  $progress.style.display = 'block';
+  $answer.style.display = 'none';
+  $status.textContent = 'Querying segments...';
+  $status.style.color = '';
+
+  const params = new URLSearchParams({
+    question,
+    start_ms: range.startMs,
+    end_ms:   range.endMs,
+    branching_factor: 2,
+    beam_width: 1,
+  });
+
+  const evtSource = new EventSource(
+    `${apiBase}/robots/${robotId}/questions/stream?${params}`
+  );
+
+  evtSource.onmessage = (e) => {
+    let data;
+    try { data = JSON.parse(e.data); } catch { return; }
+    switch (data.type) {
+      case 'segments_found':
+        $status.textContent = `Found ${data.count} active segments`;
+        break;
+      case 'cache_hit':
+        $status.textContent = 'Using cached summary tree — skipping rebuild';
+        break;
+      case 'tree_building_start':
+        $status.textContent = `Building summary tree (${data.total_leaves} leaves, height ${data.height})...`;
+        break;
+      case 'node_summary':
+        $status.textContent = `Summarizing level ${data.level} (${data.total_at_level} nodes)...`;
+        break;
+      case 'tree_complete':
+        $status.textContent = 'Summary tree complete. Searching for answer...';
+        break;
+      case 'traversal_start':
+        $status.textContent = 'Traversing tree to find relevant segment...';
+        break;
+      case 'path_chosen':
+        $status.textContent = `Level ${data.level}: chose path (${(data.probability * 100).toFixed(0)}% confidence)`;
+        break;
+      case 'leaf_reached':
+        $status.textContent = `Found relevant segment (ID: ${data.segment_id})`;
+        break;
+      case 'downloading_video':
+        $status.textContent = 'Downloading video segment...';
+        break;
+      case 'stitching_videos':
+        $status.textContent = `Stitching ${data.count} video segments...`;
+        break;
+      case 'calling_video_llm':
+        $status.textContent = 'Analyzing video with AI...';
+        break;
+      case 'answer_ready':
+        $answer.style.display = 'block';
+        const segs = (data.segments || []).map(s =>
+          `Segment ${s.segment_id} (${new Date(s.start_ms).toLocaleTimeString()} - ${new Date(s.end_ms).toLocaleTimeString()})`
+        ).join(', ');
+        const verifiedTag = data.verified === false
+          ? '<span style="color:#e67e22; font-size:11px; margin-left:8px;">(unverified — video model unavailable)</span>'
+          : '';
+        $answer.innerHTML = `<strong>Answer:</strong>${verifiedTag} ${data.answer}<div style="margin-top:6px; font-size:11px; color:var(--text-dim);">${segs}</div>`;
+        $status.textContent = data.verified === false ? 'Done (unverified)' : 'Done';
+        evtSource.close();
+        resetQuestionUI();
+        break;
+      case 'error':
+        $status.textContent = `Error: ${data.message}`;
+        $status.style.color = '#ff3355';
+        evtSource.close();
+        resetQuestionUI();
+        break;
     }
-    $questionInput.value = '';
-    $btnSubmitQ.textContent = 'Saved!';
-    setTimeout(() => {
-      $btnSubmitQ.textContent = 'Submit';
-      updateQuestionState();
-    }, 1500);
-  } catch (e) {
-    console.error('Submit question error:', e);
-    alert('Failed to submit question');
-  } finally {
-    $btnSubmitQ.disabled = false;
-    if ($btnSubmitQ.textContent !== 'Saved!') {
-      $btnSubmitQ.textContent = 'Submit';
-    }
-  }
+  };
+
+  evtSource.onerror = () => {
+    $status.textContent = 'Connection lost';
+    $status.style.color = '#ff3355';
+    evtSource.close();
+    resetQuestionUI();
+  };
 });
+
+function resetQuestionUI() {
+  $btnSubmitQ.disabled = false;
+  $btnSubmitQ.textContent = 'Submit';
+  updateQuestionState();
+}
 
 // ── Auto-switch to view mode if URL param says so ────────────────────────
 if (initMode === 'view') {

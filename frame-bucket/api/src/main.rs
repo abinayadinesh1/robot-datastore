@@ -19,23 +19,29 @@ use tower_http::cors::{Any, CorsLayer};
 use chrono::Utc;
 use tracing::{error, info, warn};
 
+pub mod llm_client;
+pub mod qa_tree;
+pub mod qa_handler;
+
 // ---------------------------------------------------------------------------
 // App state
 // ---------------------------------------------------------------------------
 
-struct AppState {
-    db_dir: PathBuf,
+pub struct AppState {
+    pub db_dir: PathBuf,
     #[allow(dead_code)]
-    rustfs_public_url: String,
-    rustfs_bucket: String,
-    s3_client: aws_sdk_s3::Client,
-    labelled_data_bucket: String,
-    health_file_path: PathBuf,
-    aws_s3_client: aws_sdk_s3::Client,
-    aws_s3_bucket: String,
-    aws_s3_prefix: String,
-    robot_stream_urls: Vec<(String, String)>, // (robot_id, stream_url)
-    stitch_semaphore: Arc<Semaphore>,
+    pub rustfs_public_url: String,
+    pub rustfs_bucket: String,
+    pub s3_client: aws_sdk_s3::Client,
+    pub labelled_data_bucket: String,
+    pub health_file_path: PathBuf,
+    pub aws_s3_client: aws_sdk_s3::Client,
+    pub aws_s3_bucket: String,
+    pub aws_s3_prefix: String,
+    pub robot_stream_urls: Vec<(String, String)>, // (robot_id, stream_url)
+    pub stitch_semaphore: Arc<Semaphore>,
+    pub llm_client: llm_client::LlmClient,
+    pub qa_semaphore: Arc<Semaphore>,
 }
 
 // ---------------------------------------------------------------------------
@@ -54,6 +60,8 @@ struct Segment {
     size_bytes: Option<i64>,
     frame_count: Option<i64>,
     labels: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -152,7 +160,7 @@ struct DownloadInfo {
 // DB helpers (sync, wrapped in spawn_blocking)
 // ---------------------------------------------------------------------------
 
-fn open_robot_db(db_dir: &Path, robot_id: &str) -> rusqlite::Result<Connection> {
+pub fn open_robot_db(db_dir: &Path, robot_id: &str) -> rusqlite::Result<Connection> {
     let path = db_dir.join(format!("{robot_id}.db"));
     let conn = Connection::open(path)?;
     conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;")?;
@@ -173,6 +181,7 @@ fn row_to_segment(row: &rusqlite::Row<'_>) -> rusqlite::Result<Segment> {
         size_bytes: row.get(6)?,
         frame_count: row.get(8).ok(),
         labels,
+        description: row.get(9).ok(),
     })
 }
 
@@ -237,7 +246,7 @@ async fn list_segments(
         }
         let limit_clause = format!("LIMIT {}", q.limit.unwrap_or(100).min(1000));
         let sql = format!(
-            "SELECT id, robot_id, type, start_ms, end_ms, s3_key, size_bytes, labels, frame_count
+            "SELECT id, robot_id, type, start_ms, end_ms, s3_key, size_bytes, labels, frame_count, description
              FROM segments
              WHERE {}
              ORDER BY start_ms ASC
@@ -275,7 +284,7 @@ async fn get_segment(
     let result = tokio::task::spawn_blocking(move || -> rusqlite::Result<Option<Segment>> {
         let conn = open_robot_db(&db_dir, &robot_id)?;
         let mut stmt = conn.prepare(
-            "SELECT id, robot_id, type, start_ms, end_ms, s3_key, size_bytes, labels, frame_count
+            "SELECT id, robot_id, type, start_ms, end_ms, s3_key, size_bytes, labels, frame_count, description
              FROM segments WHERE id = ?1 AND robot_id = ?2",
         )?;
         let mut rows = stmt.query_map(params![id, robot_id], row_to_segment)?;
@@ -556,7 +565,7 @@ async fn get_timeline(
         }
         let limit_clause = format!("LIMIT {}", q.limit.unwrap_or(500).min(1000));
         let sql = format!(
-            "SELECT id, robot_id, type, start_ms, end_ms, s3_key, size_bytes, labels, frame_count
+            "SELECT id, robot_id, type, start_ms, end_ms, s3_key, size_bytes, labels, frame_count, description
              FROM segments
              WHERE {}
              ORDER BY start_ms ASC
@@ -1331,7 +1340,7 @@ struct DownloadQuery {
 }
 
 #[derive(Debug)]
-enum StitchError {
+pub enum StitchError {
     Db(String),
     S3Download(String),
     TempIo(String),
@@ -1364,7 +1373,7 @@ impl IntoResponse for StitchError {
     }
 }
 
-async fn run_ffmpeg(args: &[&str]) -> Result<(), StitchError> {
+pub async fn run_ffmpeg(args: &[&str]) -> Result<(), StitchError> {
     let output = tokio::process::Command::new("ffmpeg")
         .args(args)
         .stdout(std::process::Stdio::null())
@@ -1422,7 +1431,7 @@ async fn run_ffprobe(path: &Path) -> Result<(u32, u32, f64), StitchError> {
 }
 
 /// Download a segment file from S3 (try AWS archive first, fall back to RustFS).
-async fn download_segment_file(
+pub async fn download_segment_file(
     state: &AppState,
     s3_key: &str,
     segment_type: &str,
@@ -2387,6 +2396,16 @@ async fn main() {
         aws_s3_prefix: config.aws_s3.prefix.clone(),
         robot_stream_urls,
         stitch_semaphore: Arc::new(Semaphore::new(2)),
+        llm_client: llm_client::LlmClient::new(
+            std::env::var("LLM_BASE_URL").unwrap_or_else(|_| {
+                "https://abinayadinesh1--example-vllm-inference-serve-dev.modal.run".to_string()
+            }),
+            std::env::var("LLM_MODEL").unwrap_or_else(|_| "llm".to_string()),
+            std::env::var("VIDEO_LLM_BASE_URL").unwrap_or_else(|_| {
+                "https://abinayadinesh1--videochat-flash-inference-serve.modal.run".to_string()
+            }),
+        ),
+        qa_semaphore: Arc::new(Semaphore::new(4)),
     });
 
     let cors = CorsLayer::new()
@@ -2421,6 +2440,7 @@ async fn main() {
         .route("/robots/:robot_id/collections/:collection_id/download", get(download_collection))
         // Questions
         .route("/robots/:robot_id/questions", axum::routing::post(submit_question))
+        .route("/robots/:robot_id/questions/stream", get(qa_handler::question_stream))
         // Health
         .route("/health", get(get_health))
         .route("/health/rustfs", get(browse_rustfs))

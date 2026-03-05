@@ -1,3 +1,7 @@
+# to start
+pip install modal 
+modal setup 
+modal run modal_videochat_inference.py
 # to deploy, run 
 modal deploy modal_videochat_inference.py
 
