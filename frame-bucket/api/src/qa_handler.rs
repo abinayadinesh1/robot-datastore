@@ -134,7 +134,7 @@ async fn run_qa_pipeline(
     let start = q.start_ms;
     let end = q.end_ms;
 
-    let segments: Vec<SegmentForTree> = tokio::task::spawn_blocking(move || {
+    let mut segments: Vec<SegmentForTree> = tokio::task::spawn_blocking(move || {
         let conn = open_robot_db(&db_dir, &rid)
             .map_err(|e| format!("DB error: {e}"))?;
         let mut stmt = conn
@@ -182,21 +182,114 @@ async fn run_qa_pipeline(
     ))
     .await;
 
-    // ── Step 2: Check all segments have descriptions ─────────────────────
+    // ── Step 2: Check descriptions; backfill if ≤ 10 missing ───────────
 
-    let missing: Vec<i64> = segments
+    let missing_idxs: Vec<usize> = segments
         .iter()
-        .filter(|s| s.description.is_empty())
-        .map(|s| s.id)
+        .enumerate()
+        .filter(|(_, s)| s.description.is_empty())
+        .map(|(i, _)| i)
         .collect();
 
-    if !missing.is_empty() {
-        return Err(format!(
-            "{} segment(s) are missing descriptions (IDs: {:?}). \
-             This robot may not have annotation enabled yet.",
-            missing.len(),
-            &missing[..missing.len().min(5)]
-        ));
+    if !missing_idxs.is_empty() {
+        if missing_idxs.len() > 10 {
+            let ids: Vec<i64> = missing_idxs.iter().map(|&i| segments[i].id).collect();
+            return Err(format!(
+                "{} segment(s) are missing descriptions (IDs: {:?}). \
+                 This robot may not have annotation enabled yet.",
+                ids.len(),
+                &ids[..ids.len().min(5)]
+            ));
+        }
+
+        // Dynamic backfill: annotate the few missing segments on the fly
+        let missing_ids: Vec<i64> = missing_idxs.iter().map(|&i| segments[i].id).collect();
+        send(sse_event(
+            "backfilling_descriptions",
+            serde_json::json!({
+                "count": missing_idxs.len(),
+                "segment_ids": missing_ids,
+            }),
+        ))
+        .await;
+
+        let backfill_dir = std::env::temp_dir().join(format!("qa_backfill_{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&backfill_dir)
+            .await
+            .map_err(|e| format!("failed to create backfill temp dir: {e}"))?;
+
+        for (progress_i, &idx) in missing_idxs.iter().enumerate() {
+            let seg = &segments[idx];
+            let seg_id = seg.id;
+
+            send(sse_event(
+                "annotating_segment",
+                serde_json::json!({
+                    "segment_id": seg_id,
+                    "progress": format!("{}/{}", progress_i + 1, missing_idxs.len()),
+                }),
+            ))
+            .await;
+
+            // Download video
+            let path = crate::download_segment_file(
+                &state,
+                &seg.s3_key,
+                "active",
+                &backfill_dir,
+                seg_id,
+            )
+            .await
+            .map_err(|e| format!("failed to download segment {seg_id} for annotation: {e}"))?;
+
+            let video_bytes = tokio::fs::read(&path)
+                .await
+                .map_err(|e| format!("failed to read segment {seg_id} video: {e}"))?;
+
+            // Call video LLM for description
+            let model_desc = state
+                .llm_client
+                .ask_video(
+                    video_bytes,
+                    "Give a detailed description of everything happening in this video.",
+                    128,
+                )
+                .await
+                .map_err(|e| format!("failed to annotate segment {seg_id}: {e}"))?;
+
+            // Format with timestamps matching the annotation pipeline
+            let start_fmt = format_ms(seg.start_ms);
+            let end_fmt = format_ms(seg.end_ms);
+            let description = format!("From {start_fmt} to {end_fmt}, {model_desc}");
+
+            // Write to SQLite
+            let db_dir2 = state.db_dir.clone();
+            let rid2 = robot_id.clone();
+            let desc_clone = description.clone();
+            tokio::task::spawn_blocking(move || {
+                let conn = open_robot_db(&db_dir2, &rid2)
+                    .map_err(|e| format!("DB error: {e}"))?;
+                conn.execute(
+                    "UPDATE segments SET description = ?1 WHERE id = ?2",
+                    params![desc_clone, seg_id],
+                )
+                .map_err(|e| format!("SQL update error: {e}"))?;
+                Ok::<_, String>(())
+            })
+            .await
+            .map_err(|e| format!("spawn_blocking error: {e}"))??;
+
+            // Update in-memory
+            segments[idx].description = description;
+        }
+
+        let _ = tokio::fs::remove_dir_all(&backfill_dir).await;
+
+        send(sse_event(
+            "backfill_complete",
+            serde_json::json!({ "count": missing_idxs.len() }),
+        ))
+        .await;
     }
 
     // ── Step 3: Check cache or build tree ────────────────────────────────
@@ -536,4 +629,12 @@ async fn build_and_cache(
     }
 
     Ok(tree)
+}
+
+/// Format millisecond timestamp as UTC string, matching the annotation pipeline.
+fn format_ms(ms: i64) -> String {
+    chrono::TimeZone::timestamp_millis_opt(&chrono::Utc, ms)
+        .single()
+        .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+        .unwrap_or_else(|| ms.to_string())
 }
