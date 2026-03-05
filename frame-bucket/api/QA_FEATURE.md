@@ -11,7 +11,7 @@ Ask natural-language questions about a time interval of robot video and get answ
 3. Segment descriptions become **leaf nodes** of a tree.
 4. Leaves are grouped into chunks of `branching_factor` (default 2). Each chunk is summarized by the text LLM into a **parent node**.
 5. This repeats bottom-up until a single **root** remains. Tree height is O(log_k(n)).
-6. The tree is cached to `data/{robot_id}_trees/{hash}.json`. Identical queries skip the build.
+6. The tree is cached to `data/{robot_id}_trees/{hash}.json`. Identical queries skip the build. The hash is made from robot-id, interval, and branching_factor. 
 
 ### Part 2 — Beam-search traversal
 

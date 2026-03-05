@@ -299,14 +299,33 @@ async fn run_qa_pipeline(
 
     let tree: SummaryTree = if !q.force_rebuild {
         if let Some(cached) = qa_tree::load_cached_tree(&cp).await {
-            info!(cache_key = %ck, "using cached summary tree");
-            send(sse_event("cache_hit", serde_json::json!({ "tree_id": ck }))).await;
-            cached
+            let current_seg_ids: Vec<i64> = segments.iter().map(|s| s.id).collect();
+            if cached.segment_ids != current_seg_ids {
+                info!(cache_key = %ck, "cached tree segments changed, rebuilding");
+                build_and_cache(&state, &robot_id, q.start_ms, q.end_ms, segments, bf, &cp, &tx, None).await?
+            } else if cached.complete {
+                info!(cache_key = %ck, "using cached complete summary tree");
+                send(sse_event("cache_hit", serde_json::json!({ "tree_id": ck }))).await;
+                cached
+            } else {
+                info!(
+                    cache_key = %ck,
+                    nodes_built = cached.nodes.len(),
+                    resume_level = cached.current_build_level,
+                    "resuming incomplete cached tree"
+                );
+                send(sse_event("cache_resuming", serde_json::json!({
+                    "tree_id": ck,
+                    "nodes_built": cached.nodes.len(),
+                    "resume_level": cached.current_build_level,
+                }))).await;
+                build_and_cache(&state, &robot_id, q.start_ms, q.end_ms, segments, bf, &cp, &tx, Some(cached)).await?
+            }
         } else {
-            build_and_cache(&state, &robot_id, q.start_ms, q.end_ms, segments, bf, &cp, &tx).await?
+            build_and_cache(&state, &robot_id, q.start_ms, q.end_ms, segments, bf, &cp, &tx, None).await?
         }
     } else {
-        build_and_cache(&state, &robot_id, q.start_ms, q.end_ms, segments, bf, &cp, &tx).await?
+        build_and_cache(&state, &robot_id, q.start_ms, q.end_ms, segments, bf, &cp, &tx, None).await?
     };
 
     // ── Step 4: Beam-search traversal ────────────────────────────────────
@@ -601,6 +620,7 @@ async fn build_and_cache(
     branching_factor: usize,
     cache_path: &Path,
     sse_tx: &mpsc::Sender<Event>,
+    partial: Option<SummaryTree>,
 ) -> Result<SummaryTree, String> {
     // Create a channel to forward tree progress events as SSE
     let (progress_tx, mut progress_rx) = mpsc::channel::<serde_json::Value>(64);
@@ -620,13 +640,10 @@ async fn build_and_cache(
         &state.llm_client,
         &state.qa_semaphore,
         &progress_tx,
+        Some(cache_path),
+        partial,
     )
     .await?;
-
-    // Save to cache
-    if let Err(e) = qa_tree::save_tree(&tree, cache_path).await {
-        warn!(error = %e, "failed to cache summary tree (continuing anyway)");
-    }
 
     Ok(tree)
 }
