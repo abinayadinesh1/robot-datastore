@@ -12,7 +12,8 @@ rows = conn.execute('''
 ''').fetchall()
 if rows:
     for r in rows:
-        print(f'{r[\"id\"]:4d} | {r[\"type\"]:6s} | {r[\"s3_key\"][:50]} | {r[\"desc_preview\"]}')
+        rid, rtype, rkey, rdesc = r["id"], r["type"], r["s3_key"][:50], r["desc_preview"]
+        print(f"{rid:4d} | {rtype:6s} | {rkey} | {rdesc}")
 else:
     print('No annotated segments found yet.')
 
