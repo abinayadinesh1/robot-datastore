@@ -375,7 +375,7 @@ body.page-robot main {
   position: relative; flex: 1; background: #111111;
   display: flex; align-items: center; justify-content: center; overflow: hidden;
 }
-.tile-body img, .tile-body video { width: 100%; height: 100%; object-fit: contain; display: block; }
+.tile-body img, .tile-body video, .tile-body canvas { width: 100%; height: 100%; object-fit: contain; display: block; }
 
 .tile-footer {
   display: flex; align-items: center; justify-content: space-between;

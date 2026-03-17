@@ -14,8 +14,8 @@ vllm_image = (
     .env({"HF_XET_HIGH_PERFORMANCE": "1"})  # faster model transfers
 )
 
-MODEL_NAME = "Qwen/Qwen3-4B-Thinking-2507-FP8"
-MODEL_REVISION = "953532f942706930ec4bb870569932ef63038fdf"  # avoid nasty surprises when repos update!
+MODEL_NAME = "Qwen/Qwen3-4B"
+# MODEL_REVISION = "953532f942706930ec4bb870569932ef63038fdf"  # avoid nasty surprises when repos update!
 
 hf_cache_vol = modal.Volume.from_name("huggingface-cache", create_if_missing=True)
 vllm_cache_vol = modal.Volume.from_name("vllm-cache", create_if_missing=True)
@@ -51,11 +51,8 @@ def serve():
         "serve",
         "--uvicorn-log-level=info",
         MODEL_NAME,
-        "--revision",
-        MODEL_REVISION,
         "--served-model-name",
         MODEL_NAME,
-        "llm",
         "--host",
         "0.0.0.0",
         "--port",

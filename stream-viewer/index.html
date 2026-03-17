@@ -443,21 +443,86 @@ function attachStreamHandlers(el,overlay,footer,stream){
   }
 
   function fallbackToMjpeg(fromWebrtc){
-    // Replace <video> with <img> for MJPEG fallback
     if(fromWebrtc){const urlEl=footer.querySelector('.footer-url');if(urlEl)urlEl.textContent='MJPEG fallback: '+(stream.url||'');}
-    const img=document.createElement('img');img.alt=el.alt||'';img.loading='eager';
-    el.replaceWith(img);
+    const canvas=document.createElement('canvas');
+    el.replaceWith(canvas);
+    const ctx=canvas.getContext('2d');
     const url=stream.url;
     if(!url){setStatus('error',0);return;}
-    img.onload=()=>{clearTimeout(retryTimer);clearInterval(countdown);retryDelay=2000;setStatus('live');};
-    img.onerror=()=>{
+    setStatus('connecting');
+    let abortCtrl=null;
+
+    function startMjpegStream(){
+      if(abortCtrl)abortCtrl.abort();
+      abortCtrl=new AbortController();
+      fetch(url,{signal:abortCtrl.signal}).then(resp=>{
+        if(!resp.ok||!resp.body)throw new Error('HTTP '+resp.status);
+        retryDelay=2000;setStatus('live');
+        const reader=resp.body.getReader();
+        let buf=new Uint8Array(0);
+        const BOUNDARY=new TextEncoder().encode('--frame');
+
+        function pump(){
+          reader.read().then(({done,value})=>{
+            if(done){handleError();return;}
+            // Append new data to buffer
+            const tmp=new Uint8Array(buf.length+value.length);
+            tmp.set(buf);tmp.set(value,buf.length);buf=tmp;
+            // Extract JPEG frames from multipart stream
+            let processed=false;
+            while(true){
+              const bIdx=indexOf(buf,BOUNDARY);
+              if(bIdx===-1)break;
+              const afterBoundary=bIdx+BOUNDARY.length;
+              // Find end of headers (double CRLF)
+              const hdrEnd=indexOf(buf,new TextEncoder().encode('\r\n\r\n'),afterBoundary);
+              if(hdrEnd===-1)break;
+              const jpegStart=hdrEnd+4;
+              // Find next boundary
+              const nextB=indexOf(buf,BOUNDARY,jpegStart);
+              if(nextB===-1)break;
+              // Strip trailing \r\n before boundary
+              let jpegEnd=nextB;
+              if(jpegEnd>=2&&buf[jpegEnd-2]===0x0D&&buf[jpegEnd-1]===0x0A)jpegEnd-=2;
+              const jpegData=buf.slice(jpegStart,jpegEnd);
+              buf=buf.slice(nextB);
+              processed=true;
+              // Decode and draw — createImageBitmap decodes off the main thread
+              const blob=new Blob([jpegData],{type:'image/jpeg'});
+              createImageBitmap(blob).then(bmp=>{
+                if(canvas.width!==bmp.width||canvas.height!==bmp.height){
+                  canvas.width=bmp.width;canvas.height=bmp.height;
+                }
+                ctx.drawImage(bmp,0,0);
+                bmp.close();
+              }).catch(()=>{});
+            }
+            pump();
+          }).catch(handleError);
+        }
+        pump();
+      }).catch(handleError);
+    }
+
+    function handleError(){
       clearTimeout(retryTimer);clearInterval(countdown);
       let secs=Math.round(retryDelay/1000);setStatus('error',secs);
       countdown=setInterval(()=>{secs--;const t=overlay.querySelector('.status-text');if(t)t.textContent=secs>0?`Retry in ${secs}s`:'Reconnecting';if(lbl)lbl.textContent=secs>0?`retry ${secs}s`:'reconnecting';},1000);
-      retryTimer=setTimeout(()=>{clearInterval(countdown);setStatus('connecting');const sep=url.includes('?')?'&':'?';img.src=url+sep+'_t='+Date.now();retryDelay=Math.min(retryDelay*2,30000);},retryDelay);
-    };
-    img.src=url;
+      retryTimer=setTimeout(()=>{clearInterval(countdown);setStatus('connecting');startMjpegStream();retryDelay=Math.min(retryDelay*2,30000);},retryDelay);
+    }
+
+    startMjpegStream();
   }
+}
+
+// Binary indexOf helper for multipart boundary search
+function indexOf(haystack,needle,from){
+  from=from||0;
+  outer:for(let i=from;i<=haystack.length-needle.length;i++){
+    for(let j=0;j<needle.length;j++){if(haystack[i+j]!==needle[j])continue outer;}
+    return i;
+  }
+  return -1;
 }
 
 function attachTileHandlers(tile,header,streamId){
@@ -553,11 +618,20 @@ function resetModalMode(){
 }
 
 const grid=$('grid');
+let _staggerQueue=Promise.resolve();
 function render(){
   const eids=new Set([...grid.children].map(el=>+el.dataset.id));
   const nids=new Set(state.streams.map(s=>s.id));
   for(const el of[...grid.children])if(!nids.has(+el.dataset.id))el.remove();
-  state.streams.forEach((s,i)=>{if(!eids.has(s.id))grid.appendChild(createTile(s,i));});
+  // Stagger new tile creation so multiple streams don't slam the server simultaneously
+  state.streams.forEach((s,i)=>{
+    if(!eids.has(s.id)){
+      _staggerQueue=_staggerQueue.then(()=>new Promise(r=>{
+        grid.appendChild(createTile(s,i));
+        setTimeout(r,300);
+      }));
+    }
+  });
   updateMeta();
 }
 

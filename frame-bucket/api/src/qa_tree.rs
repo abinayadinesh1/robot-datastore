@@ -1,3 +1,6 @@
+use std::collections::HashMap;
+
+use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
@@ -78,6 +81,8 @@ pub enum TreeEvent {
         level: usize,
         total_at_level: usize,
         summary_preview: String,
+        /// Whether this summary was served from the node-level cache.
+        cached: bool,
     },
     #[serde(rename = "tree_complete")]
     Complete { node_count: usize, height: usize },
@@ -123,6 +128,82 @@ pub async fn save_tree(tree: &SummaryTree, path: &Path) -> std::io::Result<()> {
 }
 
 // ---------------------------------------------------------------------------
+// Node-level summary cache (for subtree reuse across trees)
+// ---------------------------------------------------------------------------
+
+/// Compute a content-addressed cache key for an internal node based on its
+/// direct children's time ranges. This is intrinsic to the data: same robot,
+/// same branching factor, same child intervals → same cache key.
+pub fn node_cache_key(robot_id: &str, bf: usize, child_ranges: &[(i64, i64)]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(robot_id.as_bytes());
+    hasher.update(bf.to_le_bytes());
+    for &(start, end) in child_ranges {
+        hasher.update(start.to_le_bytes());
+        hasher.update(end.to_le_bytes());
+    }
+    hex::encode(&hasher.finalize()[..8])
+}
+
+/// Create the node summary cache table if it doesn't exist.
+pub fn ensure_node_cache_table(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS node_summary_cache (
+            key     TEXT PRIMARY KEY,
+            summary TEXT NOT NULL
+        );"
+    )
+}
+
+/// Load all cached node summaries into a HashMap for fast lookup during build.
+pub fn load_node_cache(conn: &rusqlite::Connection) -> rusqlite::Result<HashMap<String, String>> {
+    let mut stmt = conn.prepare("SELECT key, summary FROM node_summary_cache")?;
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    let mut map = HashMap::new();
+    for row in rows {
+        let (k, v) = row?;
+        map.insert(k, v);
+    }
+    Ok(map)
+}
+
+/// Flush new cache entries to SQLite. Uses INSERT OR REPLACE so concurrent
+/// builds and force-rebuilds produce consistent results.
+pub fn flush_node_cache(
+    conn: &rusqlite::Connection,
+    entries: &[(String, String)],
+) -> rusqlite::Result<()> {
+    let mut stmt = conn.prepare(
+        "INSERT OR REPLACE INTO node_summary_cache (key, summary) VALUES (?1, ?2)"
+    )?;
+    for (k, v) in entries {
+        stmt.execute(params![k, v])?;
+    }
+    Ok(())
+}
+
+/// Recompute the (start_ms, end_ms) range for each node from the existing
+/// node list. Used when resuming a partial tree build.
+pub fn recompute_node_ranges(nodes: &[TreeNode]) -> Vec<(i64, i64)> {
+    let mut ranges = Vec::with_capacity(nodes.len());
+    for node in nodes {
+        match &node.node_type {
+            NodeType::Leaf { start_ms, end_ms, .. } => {
+                ranges.push((*start_ms, *end_ms));
+            }
+            NodeType::Internal { children } => {
+                let start = children.iter().map(|&c| ranges[c].0).min().unwrap_or(0);
+                let end = children.iter().map(|&c| ranges[c].1).max().unwrap_or(0);
+                ranges.push((start, end));
+            }
+        }
+    }
+    ranges
+}
+
+// ---------------------------------------------------------------------------
 // Tree building
 // ---------------------------------------------------------------------------
 
@@ -149,6 +230,7 @@ pub async fn build_tree(
     progress_tx: &mpsc::Sender<serde_json::Value>,
     cache_path: Option<&Path>,
     partial: Option<SummaryTree>,
+    node_cache: &mut HashMap<String, String>,
 ) -> Result<SummaryTree, String> {
     let n = segments.len();
     if n == 0 {
@@ -213,8 +295,15 @@ pub async fn build_tree(
         (nodes, ids, 1)
     };
 
+    // Track each node's (start_ms, end_ms) range for node-level cache keys.
+    // On resume, recompute from existing nodes; on fresh build, already set
+    // from leaf creation above.
+    let mut node_ranges: Vec<(i64, i64)> = recompute_node_ranges(&all_nodes);
+
     // Build up level by level
     let mut level = start_level;
+    let mut cache_hits = 0usize;
+    let mut cache_misses = 0usize;
 
     while current_level_ids.len() > 1 {
         // Pad to multiple of branching_factor by repeating last node
@@ -232,23 +321,7 @@ pub async fn build_tree(
 
         // Process chunks sequentially with semaphore-bounded concurrency
         for chunk_ids in &chunks {
-            let child_summaries: Vec<String> = chunk_ids
-                .iter()
-                .map(|&id| all_nodes[id].summary.clone())
-                .collect();
             let chunk_ids = chunk_ids.clone();
-            let permit = semaphore
-                .acquire()
-                .await
-                .map_err(|e| format!("semaphore error: {e}"))?;
-
-            let refs: Vec<&str> = child_summaries.iter().map(|s| s.as_str()).collect();
-            let summary = llm
-                .summarize_text(&refs)
-                .await
-                .map_err(|e| format!("LLM summarize error: {e}"))?;
-
-            drop(permit);
 
             // Deduplicate child IDs (from padding)
             let mut unique_children: Vec<usize> = Vec::new();
@@ -258,8 +331,48 @@ pub async fn build_tree(
                 }
             }
 
+            // Compute cache key from direct children's time ranges
+            let child_ranges: Vec<(i64, i64)> = unique_children
+                .iter()
+                .map(|&cid| node_ranges[cid])
+                .collect();
+            let nck = node_cache_key(robot_id, branching_factor, &child_ranges);
+
+            // Check node-level cache before calling LLM
+            let (summary, was_cached) = if let Some(cached) = node_cache.get(&nck) {
+                cache_hits += 1;
+                (cached.clone(), true)
+            } else {
+                // Cache miss — call LLM
+                let child_summaries: Vec<String> = chunk_ids
+                    .iter()
+                    .map(|&id| all_nodes[id].summary.clone())
+                    .collect();
+                let permit = semaphore
+                    .acquire()
+                    .await
+                    .map_err(|e| format!("semaphore error: {e}"))?;
+
+                let refs: Vec<&str> = child_summaries.iter().map(|s| s.as_str()).collect();
+                let summary = llm
+                    .summarize_text(&refs)
+                    .await
+                    .map_err(|e| format!("LLM summarize error: {e}"))?;
+
+                drop(permit);
+
+                node_cache.insert(nck, summary.clone());
+                cache_misses += 1;
+                (summary, false)
+            };
+
             let node_id = all_nodes.len();
             let preview = summary.chars().take(100).collect::<String>();
+
+            // Compute this node's range from its children
+            let node_start = child_ranges.iter().map(|r| r.0).min().unwrap_or(0);
+            let node_end = child_ranges.iter().map(|r| r.1).max().unwrap_or(0);
+            node_ranges.push((node_start, node_end));
 
             all_nodes.push(TreeNode {
                 id: node_id,
@@ -274,6 +387,7 @@ pub async fn build_tree(
                     level,
                     total_at_level,
                     summary_preview: preview,
+                    cached: was_cached,
                 }).unwrap())
                 .await;
         }
@@ -324,6 +438,8 @@ pub async fn build_tree(
         root_id,
         node_count = tree.nodes.len(),
         height = actual_height,
+        cache_hits,
+        cache_misses,
         "summary tree built"
     );
 

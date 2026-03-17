@@ -28,6 +28,7 @@ impl SegmentDb {
         // Enable WAL for concurrent reader (API) + writer (consumer)
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")?;
 
+        // size_bytes is important for calculating disk usage
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS segments (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,

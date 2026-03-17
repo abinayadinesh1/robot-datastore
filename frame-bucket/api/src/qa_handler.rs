@@ -1,4 +1,4 @@
-use std::collections::BinaryHeap;
+use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -302,7 +302,7 @@ async fn run_qa_pipeline(
             let current_seg_ids: Vec<i64> = segments.iter().map(|s| s.id).collect();
             if cached.segment_ids != current_seg_ids {
                 info!(cache_key = %ck, "cached tree segments changed, rebuilding");
-                build_and_cache(&state, &robot_id, q.start_ms, q.end_ms, segments, bf, &cp, &tx, None).await?
+                build_and_cache(&state, &robot_id, q.start_ms, q.end_ms, segments, bf, &cp, &tx, None, false).await?
             } else if cached.complete {
                 info!(cache_key = %ck, "using cached complete summary tree");
                 send(sse_event("cache_hit", serde_json::json!({ "tree_id": ck }))).await;
@@ -319,13 +319,13 @@ async fn run_qa_pipeline(
                     "nodes_built": cached.nodes.len(),
                     "resume_level": cached.current_build_level,
                 }))).await;
-                build_and_cache(&state, &robot_id, q.start_ms, q.end_ms, segments, bf, &cp, &tx, Some(cached)).await?
+                build_and_cache(&state, &robot_id, q.start_ms, q.end_ms, segments, bf, &cp, &tx, Some(cached), false).await?
             }
         } else {
-            build_and_cache(&state, &robot_id, q.start_ms, q.end_ms, segments, bf, &cp, &tx, None).await?
+            build_and_cache(&state, &robot_id, q.start_ms, q.end_ms, segments, bf, &cp, &tx, None, false).await?
         }
     } else {
-        build_and_cache(&state, &robot_id, q.start_ms, q.end_ms, segments, bf, &cp, &tx, None).await?
+        build_and_cache(&state, &robot_id, q.start_ms, q.end_ms, segments, bf, &cp, &tx, None, true).await?
     };
 
     // ── Step 4: Beam-search traversal ────────────────────────────────────
@@ -621,7 +621,29 @@ async fn build_and_cache(
     cache_path: &Path,
     sse_tx: &mpsc::Sender<Event>,
     partial: Option<SummaryTree>,
+    force_rebuild: bool,
 ) -> Result<SummaryTree, String> {
+    // Load node-level summary cache from SQLite (skip on force_rebuild)
+    let db_dir = state.db_dir.clone();
+    let rid = robot_id.to_string();
+    let mut node_cache: HashMap<String, String> = if force_rebuild {
+        HashMap::new()
+    } else {
+        tokio::task::spawn_blocking(move || {
+            let conn = open_robot_db(&db_dir, &rid)
+                .map_err(|e| format!("DB error loading node cache: {e}"))?;
+            qa_tree::ensure_node_cache_table(&conn)
+                .map_err(|e| format!("DB error creating node cache table: {e}"))?;
+            qa_tree::load_node_cache(&conn)
+                .map_err(|e| format!("DB error loading node cache: {e}"))
+        })
+        .await
+        .map_err(|e| format!("spawn_blocking error: {e}"))??
+    };
+
+    let keys_before: HashSet<String> = node_cache.keys().cloned().collect();
+    info!(cache_size = keys_before.len(), force_rebuild, "node summary cache loaded");
+
     // Create a channel to forward tree progress events as SSE
     let (progress_tx, mut progress_rx) = mpsc::channel::<serde_json::Value>(64);
     let sse_tx_clone = sse_tx.clone();
@@ -642,8 +664,33 @@ async fn build_and_cache(
         &progress_tx,
         Some(cache_path),
         partial,
+        &mut node_cache,
     )
     .await?;
+
+    // Flush any new node cache entries to SQLite
+    let new_entries: Vec<(String, String)> = node_cache
+        .iter()
+        .filter(|(k, _)| !keys_before.contains(k.as_str()))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+
+    if !new_entries.is_empty() {
+        let db_dir = state.db_dir.clone();
+        let rid = robot_id.to_string();
+        let count = new_entries.len();
+        tokio::task::spawn_blocking(move || {
+            let conn = open_robot_db(&db_dir, &rid)
+                .map_err(|e| format!("DB error flushing node cache: {e}"))?;
+            qa_tree::ensure_node_cache_table(&conn)
+                .map_err(|e| format!("DB error creating node cache table: {e}"))?;
+            qa_tree::flush_node_cache(&conn, &new_entries)
+                .map_err(|e| format!("DB error flushing node cache: {e}"))
+        })
+        .await
+        .map_err(|e| format!("spawn_blocking error: {e}"))??;
+        info!(new_entries = count, "flushed node cache entries to SQLite");
+    }
 
     Ok(tree)
 }
