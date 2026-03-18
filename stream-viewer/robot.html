@@ -7,6 +7,7 @@
 <link href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,500;0,700;0,800;1,400;1,500&family=IBM+Plex+Mono:wght@300;400;500;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css">
 <script src="webrtc.js"></script>
+<script src="drive.js"></script>
 </head>
 <body class="page-robot">
 
@@ -52,6 +53,7 @@
     <button class="mode-btn active" id="btn-live">Live Feed</button>
     <button class="mode-btn" id="btn-view">View Mode</button>
     <button class="mode-btn" id="btn-settings">Settings</button>
+    <button class="mode-btn" id="btn-control">Control</button>
   </div>
 
   <!-- Live feed container -->
@@ -266,6 +268,11 @@
       <div class="settings-status" id="settings-status"></div>
     </div>
   </div>
+
+  <!-- Control mode container (hidden by default) -->
+  <div id="control-container" style="display:none;">
+    <div id="control-wasd-area"></div>
+  </div>
 </main>
 
 <script>
@@ -359,16 +366,22 @@ function formatBytes(bytes) {
 // ── Mode toggle ──────────────────────────────────────────────────────────
 $btnLive.addEventListener('click', () => switchMode('live'));
 $btnView.addEventListener('click', () => switchMode('view'));
+document.getElementById('btn-control').addEventListener('click', () => switchMode('control'));
 
 function switchMode(mode) {
+  // Exit control mode if leaving it
+  if (vs.mode === 'control' && mode !== 'control') exitControlMode();
   vs.mode = mode;
   $btnLive.classList.toggle('active', mode === 'live');
   $btnView.classList.toggle('active', mode === 'view');
   document.getElementById('btn-settings').classList.toggle('active', mode === 'settings');
-  $liveContainer.style.display = mode === 'live' ? '' : 'none';
+  document.getElementById('btn-control').classList.toggle('active', mode === 'control');
+  // Keep live video visible in both live and control modes
+  $liveContainer.style.display = (mode === 'live' || mode === 'control') ? '' : 'none';
   $viewContainer.style.display = mode === 'view' ? '' : 'none';
   document.getElementById('settings-container').style.display = mode === 'settings' ? '' : 'none';
-  const subs = { live: 'live feed', view: 'view mode', settings: 'filter tuning' };
+  document.getElementById('control-container').style.display = mode === 'control' ? '' : 'none';
+  const subs = { live: 'live feed', view: 'view mode', settings: 'filter tuning', control: 'control mode' };
   document.getElementById('fig-sub').textContent = subs[mode] || mode;
 
   if (mode === 'view') {
@@ -376,6 +389,8 @@ function switchMode(mode) {
     fetchActiveDates();
   } else if (mode === 'settings') {
     fetchFilterConfig();
+  } else if (mode === 'control') {
+    enterControlMode();
   } else {
     stopPlayback();
   }
@@ -1586,11 +1601,47 @@ function resetQuestionUI() {
   updateQuestionState();
 }
 
+// ── Control mode ─────────────────────────────────────────────────────────
+let controlWidget = null;
+let controlController = null;
+
+function enterControlMode() {
+  const stream = { url: url, webrtc_url: webrtcUrl };
+  const wsUrl = getDriveWsUrl(stream);
+  const area = document.getElementById('control-wasd-area');
+  area.innerHTML = '';
+
+  if (!wsUrl) {
+    area.innerHTML = '<div style="font-family:var(--serif);font-size:13px;color:var(--text-dim);padding:12px;">Cannot derive drive URL from stream</div>';
+    return;
+  }
+
+  controlWidget = createWasdWidget({ size: 'full' });
+  area.appendChild(controlWidget.element);
+
+  controlController = createDriveController(wsUrl, controlWidget, {
+    onConnect: function () { controlWidget.setConnected(true); },
+    onDisconnect: function () { controlWidget.setConnected(false); },
+    onError: function () { console.error('Drive connection error'); },
+    onClose: function () { switchMode('live'); }
+  });
+  controlController.connect();
+}
+
+function exitControlMode() {
+  if (controlController) { controlController.destroy(); controlController = null; }
+  if (controlWidget) { controlWidget.destroy(); controlWidget = null; }
+  var area = document.getElementById('control-wasd-area');
+  if (area) area.innerHTML = '';
+}
+
 // ── Auto-switch to view mode if URL param says so ────────────────────────
 if (initMode === 'view') {
   switchMode('view');
 } else if (initMode === 'settings') {
   switchMode('settings');
+} else if (initMode === 'control') {
+  switchMode('control');
 }
 </script>
 </body>

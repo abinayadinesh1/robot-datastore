@@ -7,6 +7,7 @@
 <link href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,500;0,700;0,800;1,400;1,500&family=IBM+Plex+Mono:wght@300;400;500;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css">
 <script src="webrtc.js"></script>
+<script src="drive.js"></script>
 </head>
 <body class="page-index">
 
@@ -357,6 +358,9 @@ function createTile(stream,idx){
       <span class="tile-label" title="Click to rename">${escHtml(stream.label)}</span>
     </div>
     <div class="tile-actions">
+      <button class="tile-btn" data-action="drive" title="Drive (WASD)">
+        <svg viewBox="0 0 20 20" fill="currentColor"><path d="M10 3a1 1 0 01.707.293l2 2a1 1 0 01-1.414 1.414L10 5.414 8.707 6.707a1 1 0 01-1.414-1.414l2-2A1 1 0 0110 3zm-3.707 7.707a1 1 0 010-1.414l2-2a1 1 0 011.414 1.414L8.414 10l1.293 1.293a1 1 0 01-1.414 1.414l-2-2zm7.414-1.414a1 1 0 00-1.414 1.414L13.586 10l-1.293-1.293a1 1 0 011.414-1.414l2 2a1 1 0 010 1.414l-2 2a1 1 0 01-1.414-1.414L13.586 10zM10 13a1 1 0 01.707.293l2 2a1 1 0 01-1.414 1.414L10 15.414l-1.293 1.293a1 1 0 01-1.414-1.414l2-2A1 1 0 0110 13z"/></svg>
+      </button>
       <button class="tile-btn" data-action="edit" title="Edit">
         <svg viewBox="0 0 20 20" fill="currentColor"><path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z"/></svg>
       </button>
@@ -540,8 +544,10 @@ function attachTileHandlers(tile,header,streamId){
     if(btn.dataset.action==='retry')retryStream(streamId);
     if(btn.dataset.action==='edit')openEditModal(streamId);
     if(btn.dataset.action==='duplicate')duplicateStream(streamId);
+    if(btn.dataset.action==='drive')toggleDriveOverlay(tile,streamId);
   });
   tile.querySelector('.tile-body').addEventListener('dblclick',()=>{
+    if(tile.querySelector('.drive-overlay'))return; // suppress while driving
     const s=state.streams.find(s=>s.id===streamId);
     if(s){let u='robot.html?label='+encodeURIComponent(s.label)+'&url='+encodeURIComponent(s.url)+'&robot_id='+encodeURIComponent(s.robot_id||'reachy-001');if(s.webrtc_url)u+='&webrtc_url='+encodeURIComponent(s.webrtc_url);window.open(u,'_blank');}
   });
@@ -717,6 +723,42 @@ $('modal-cancel').addEventListener('click',closeModal);
 $('modal-add').addEventListener('click',submitModal);
 modal.addEventListener('click',e=>{if(e.target===modal)closeModal();});
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&modal.classList.contains('open'))closeModal();if(e.key==='Enter'&&modal.classList.contains('open')&&document.activeElement!==$('modal-cancel'))submitModal();});
+/* ── Drive overlay ────────────────────────────────────────────────────────── */
+let activeDriveOverlay=null;
+function toggleDriveOverlay(tile,streamId){
+  const body=tile.querySelector('.tile-body');
+  const existing=body.querySelector('.drive-overlay');
+  if(existing){closeDriveOverlay(existing);return;}
+  // Close any other open overlay first
+  if(activeDriveOverlay)closeDriveOverlay(activeDriveOverlay);
+  const s=state.streams.find(s=>s.id===streamId);
+  if(!s)return;
+  const wsUrl=getDriveWsUrl(s);
+  if(!wsUrl){showToast('Cannot derive drive URL from stream','warn');return;}
+  const overlay=document.createElement('div');
+  overlay.className='drive-overlay';
+  const widget=createWasdWidget({size:'compact'});
+  overlay.appendChild(widget.element);
+  body.appendChild(overlay);
+  const controller=createDriveController(wsUrl,widget,{
+    onConnect:()=>widget.setConnected(true),
+    onDisconnect:()=>widget.setConnected(false),
+    onError:()=>showToast('Drive connection failed','error'),
+    onClose:()=>closeDriveOverlay(overlay)
+  });
+  controller.connect();
+  overlay._ctrl=controller;
+  overlay._widget=widget;
+  activeDriveOverlay=overlay;
+}
+function closeDriveOverlay(overlay){
+  if(!overlay||!overlay.parentNode)return;
+  if(overlay._ctrl)overlay._ctrl.destroy();
+  if(overlay._widget)overlay._widget.destroy();
+  overlay.parentNode.removeChild(overlay);
+  if(activeDriveOverlay===overlay)activeDriveOverlay=null;
+}
+
 function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 loadInitial().then(()=>{render();loadArchiveRobots();});
 

@@ -1034,3 +1034,102 @@ body.page-robot main {
   color: var(--green); letter-spacing: 0.08em;
   min-height: 18px; margin-top: 12px;
 }
+
+/* ── DRIVE OVERLAY (WASD remote control) ──────────────────────────────────── */
+
+.drive-overlay {
+  position: absolute;
+  bottom: 10px; right: 10px;
+  z-index: 10;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  border: 1px solid rgba(255,255,255,0.12);
+  padding: 12px 14px 8px;
+  outline: none;
+  animation: tileIn 0.2s cubic-bezier(0.16,1,0.3,1);
+}
+
+.wasd-widget {
+  display: flex; flex-direction: column;
+  align-items: center; gap: 3px;
+  user-select: none;
+}
+.wasd-row {
+  display: flex; gap: 3px; justify-content: center;
+}
+
+.wasd-key {
+  width: 30px; height: 30px;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid rgba(255,255,255,0.2);
+  background: rgba(255,255,255,0.06);
+  color: rgba(255,255,255,0.6);
+  font-family: var(--serif); font-size: 12px; font-weight: 600;
+  letter-spacing: 0.04em;
+  transition: all 0.06s;
+}
+.wasd-key.active {
+  background: var(--ink);
+  color: #fff;
+  border-color: var(--ink);
+  box-shadow: 0 0 10px rgba(250,105,173,0.5);
+}
+
+.drive-status {
+  display: flex; align-items: center; gap: 5px;
+  margin-top: 6px; justify-content: center;
+}
+.drive-status-dot {
+  width: 5px; height: 5px; border-radius: 50%;
+  background: #ff3355;
+  transition: background 0.3s;
+}
+.drive-status-dot.connected { background: var(--green); }
+.drive-status-label {
+  font-family: var(--serif); font-size: 8px;
+  color: rgba(255,255,255,0.4);
+  letter-spacing: 0.1em; text-transform: uppercase;
+}
+
+.drive-hint {
+  font-family: var(--serif); font-size: 7px;
+  color: rgba(255,255,255,0.25);
+  letter-spacing: 0.12em; text-transform: uppercase;
+  text-align: center; margin-top: 4px;
+}
+
+/* ── Full-size variant (robot.html control mode) ─────────────────────────── */
+
+.wasd-widget.wasd-full { gap: 5px; }
+.wasd-widget.wasd-full .wasd-row { gap: 5px; }
+.wasd-widget.wasd-full .wasd-key {
+  width: 52px; height: 52px; font-size: 18px;
+}
+.wasd-widget.wasd-full .drive-status { margin-top: 10px; }
+.wasd-widget.wasd-full .drive-status-dot { width: 7px; height: 7px; }
+.wasd-widget.wasd-full .drive-status-label { font-size: 10px; }
+.wasd-widget.wasd-full .drive-hint { font-size: 9px; margin-top: 6px; }
+
+/* ── Control mode container (robot.html) ─────────────────────────────────── */
+
+#control-container {
+  display: flex; flex-direction: column; align-items: center; gap: 16px;
+}
+#control-wasd-area {
+  padding: 24px 32px 18px;
+  background: var(--surface);
+  border: 1px solid var(--border-hi);
+  box-shadow: 6px 6px 0 var(--ink-dim);
+  position: relative;
+}
+#control-wasd-area::before {
+  content: ''; position: absolute;
+  top: 8px; left: 8px; width: 16px; height: 16px;
+  border-top: 1.5px solid var(--ink); border-left: 1.5px solid var(--ink);
+}
+#control-wasd-area::after {
+  content: ''; position: absolute;
+  bottom: 8px; right: 8px; width: 16px; height: 16px;
+  border-bottom: 1.5px solid var(--ink); border-right: 1.5px solid var(--ink);
+}
