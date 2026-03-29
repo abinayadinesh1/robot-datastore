@@ -1,3 +1,5 @@
+echo "building. this may take a few minutes"
+cargo build --release
 mv frame-bucket-api.service frame-bucket-pipeline.service stream-viewer.service /etc/systemd/system/
 echo "Moved system services to /etc/systemd/system"
 systemctl restart frame-bucket-pipeline.service
