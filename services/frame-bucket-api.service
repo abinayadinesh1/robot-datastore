@@ -1,0 +1,14 @@
+[Unit]
+Description=Frame Bucket API
+After=network.target
+
+[Service]
+Type=simple
+User=INSTALL_USER
+WorkingDirectory=REPO_DIR/frame-bucket
+ExecStart=/bin/bash -c 'source REPO_DIR/frame-bucket/.env && exec REPO_DIR/frame-bucket/target/release/frame-bucket-api'
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
