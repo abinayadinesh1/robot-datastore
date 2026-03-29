@@ -11,8 +11,6 @@ use tracing::{debug, info, warn};
 /// Tracks stored objects for ring-buffer eviction ordering.
 #[derive(Debug)]
 pub struct ObjectEntry {
-    #[allow(dead_code)]
-    pub key: String,
     pub size_bytes: u64,
 }
 
@@ -20,8 +18,6 @@ pub struct ObjectEntry {
 pub struct RustfsStorage {
     client: aws_sdk_s3::Client,
     bucket: String,
-    #[allow(dead_code)]
-    prefix: String,
     /// Ordered map: captured_at_ms -> stored object metadata.
     pub index: Arc<Mutex<BTreeMap<i64, ObjectEntry>>>,
 }
@@ -52,7 +48,6 @@ impl RustfsStorage {
         Self {
             client,
             bucket: config.bucket.clone(),
-            prefix: config.prefix.clone(),
             index: Arc::new(Mutex::new(BTreeMap::new())),
         }
     }
@@ -76,57 +71,6 @@ impl RustfsStorage {
                 Ok(())
             }
         }
-    }
-
-    /// Store a frame in RustFS. Kept for backward compatibility.
-    #[allow(dead_code)]
-    pub async fn put_frame(
-        &self,
-        object_key: &str,
-        jpeg_data: Vec<u8>,
-        captured_at_ms: i64,
-    ) -> Result<(), StorageError> {
-        let size = jpeg_data.len() as u64;
-
-        self.client
-            .put_object()
-            .bucket(&self.bucket)
-            .key(object_key)
-            .content_type("image/jpeg")
-            .body(ByteStream::from(jpeg_data))
-            .send()
-            .await
-            .map_err(|e| StorageError::PutObject(e.to_string()))?;
-
-        debug!(key = object_key, size, "stored frame in RustFS");
-
-        self.index.lock().await.insert(
-            captured_at_ms,
-            ObjectEntry {
-                key: object_key.to_string(),
-                size_bytes: size,
-            },
-        );
-
-        Ok(())
-    }
-
-    /// Get the oldest N entries from the in-memory index.
-    #[allow(dead_code)]
-    pub async fn oldest_n(&self, n: usize) -> Vec<(i64, ObjectEntry)> {
-        let idx = self.index.lock().await;
-        idx.iter()
-            .take(n)
-            .map(|(&ts, entry)| {
-                (
-                    ts,
-                    ObjectEntry {
-                        key: entry.key.clone(),
-                        size_bytes: entry.size_bytes,
-                    },
-                )
-            })
-            .collect()
     }
 
     /// Download an object's bytes from RustFS.
@@ -187,10 +131,7 @@ impl RustfsStorage {
 
         self.index.lock().await.insert(
             start_ms,
-            ObjectEntry {
-                key: object_key.to_string(),
-                size_bytes: size,
-            },
+            ObjectEntry { size_bytes: size },
         );
 
         Ok(())
@@ -219,10 +160,7 @@ impl RustfsStorage {
 
         self.index.lock().await.insert(
             start_ms,
-            ObjectEntry {
-                key: object_key.to_string(),
-                size_bytes: size,
-            },
+            ObjectEntry { size_bytes: size },
         );
 
         Ok(())
@@ -317,15 +255,6 @@ impl RustfsStorage {
         result
     }
 
-    #[allow(dead_code)]
-    pub fn client(&self) -> &aws_sdk_s3::Client {
-        &self.client
-    }
-
-    #[allow(dead_code)]
-    pub fn bucket(&self) -> &str {
-        &self.bucket
-    }
 }
 
 /// Parse the start timestamp (in ms) from an object key.

@@ -12,7 +12,6 @@ aws-config = { version = "1", features = ["behavior-version-latest"] }
 aws-credential-types = "1"
 aws-types = "1"
 image = "0.25"
-sysinfo = "0.32"
 bytes = "1"
 futures-util = "0.3"
 chrono = "0.4"

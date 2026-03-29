@@ -11,8 +11,10 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::{info, warn};
 
+use crate::db::open_robot_db;
 use crate::qa_tree::{self, NodeType, SegmentForTree, SummaryTree};
-use crate::{open_robot_db, AppState};
+use crate::s3::{download_segment_file, run_ffmpeg};
+use crate::AppState;
 
 // ---------------------------------------------------------------------------
 // Query parameters
@@ -232,7 +234,7 @@ async fn run_qa_pipeline(
             .await;
 
             // Download video
-            let path = crate::download_segment_file(
+            let path = download_segment_file(
                 &state,
                 &seg.s3_key,
                 "active",
@@ -480,7 +482,7 @@ async fn run_qa_pipeline(
         ))
         .await;
 
-        let path = crate::download_segment_file(
+        let path = download_segment_file(
             &state,
             &leaf.s3_key,
             "active",
@@ -518,7 +520,7 @@ async fn run_qa_pipeline(
         let concat_str = concat_path.to_str().unwrap();
         let output_str = output.to_str().unwrap();
 
-        crate::run_ffmpeg(&[
+        run_ffmpeg(&[
             "-f", "concat", "-safe", "0", "-i", concat_str,
             "-c:v", "libx264", "-preset", "fast", "-crf", "23",
             "-pix_fmt", "yuv420p",

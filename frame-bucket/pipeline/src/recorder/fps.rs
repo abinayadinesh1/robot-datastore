@@ -55,10 +55,6 @@ impl FpsEstimator {
         fps
     }
 
-    /// Reset the estimator (e.g. after a stream reconnect).
-    pub fn reset(&mut self) {
-        self.timestamps.clear();
-    }
 }
 
 #[cfg(test)]
