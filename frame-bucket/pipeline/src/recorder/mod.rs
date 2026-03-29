@@ -1,4 +1,5 @@
 pub mod encoder;
+pub mod fps;
 pub mod keys;
 pub mod state;
 

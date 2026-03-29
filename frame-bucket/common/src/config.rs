@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
@@ -17,6 +19,8 @@ pub struct Config {
     pub database: DatabaseConfig,
     #[serde(default)]
     pub api: ApiConfig,
+    #[serde(default)]
+    pub annotation: Option<AnnotationConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -52,15 +56,110 @@ pub struct FilterConfig {
     pub phash_hash_size: u32,
     #[serde(default = "default_histogram_threshold")]
     pub histogram_threshold: f64,
-    /// Frame-size spike ratio for H.264 P-frame activity detection.
-    /// A P-frame is "active" if its size > spike_ratio * EMA(p_frame_sizes).
-    #[serde(default = "default_spike_ratio")]
-    pub spike_ratio: f64,
-    /// Frame-size quiet ratio for H.264 ACTIVE→IDLE detection.
-    /// A P-frame is "quiet" if its size < quiet_ratio * EMA(p_frame_sizes).
-    /// Should be lower than spike_ratio to create a dead-zone that prevents jitter.
-    #[serde(default = "default_quiet_ratio")]
-    pub quiet_ratio: f64,
+    /// Motion ratio threshold for H.264 P-frame activity detection (MB skip-count).
+    /// A P-frame is "active" if motion_ratio > motion_threshold.
+    /// motion_ratio = 1.0 - (first_skip_run / total_mbs).
+    #[serde(default = "default_motion_threshold", alias = "spike_ratio")]
+    pub motion_threshold: f64,
+    /// Quiet threshold for H.264 ACTIVE→IDLE detection (MB skip-count).
+    /// A P-frame is "quiet" if motion_ratio < quiet_threshold.
+    /// Should be lower than motion_threshold to create a dead-zone that prevents jitter.
+    #[serde(default = "default_quiet_threshold", alias = "quiet_ratio")]
+    pub quiet_threshold: f64,
+}
+
+/// Shared, atomically-updated filter parameters that running pipelines read
+/// on every frame. The management API writes new values; no restart required.
+pub struct LiveFilterParams {
+    pub phash_threshold: AtomicU32,
+    pub phash_hash_size: AtomicU32,
+    pub motion_threshold: AtomicU64, // f64 bits via to_bits/from_bits
+    pub quiet_threshold: AtomicU64,
+    pub histogram_threshold: AtomicU64,
+}
+
+impl LiveFilterParams {
+    pub fn from_config(fc: &FilterConfig) -> Arc<Self> {
+        Arc::new(Self {
+            phash_threshold: AtomicU32::new(fc.phash_threshold),
+            phash_hash_size: AtomicU32::new(fc.phash_hash_size),
+            motion_threshold: AtomicU64::new(fc.motion_threshold.to_bits()),
+            quiet_threshold: AtomicU64::new(fc.quiet_threshold.to_bits()),
+            histogram_threshold: AtomicU64::new(fc.histogram_threshold.to_bits()),
+        })
+    }
+
+    pub fn get_phash_threshold(&self) -> u32 {
+        self.phash_threshold.load(Ordering::Relaxed)
+    }
+
+    pub fn get_phash_hash_size(&self) -> u32 {
+        self.phash_hash_size.load(Ordering::Relaxed)
+    }
+
+    pub fn get_motion_threshold(&self) -> f64 {
+        f64::from_bits(self.motion_threshold.load(Ordering::Relaxed))
+    }
+
+    pub fn get_quiet_threshold(&self) -> f64 {
+        f64::from_bits(self.quiet_threshold.load(Ordering::Relaxed))
+    }
+
+    pub fn get_histogram_threshold(&self) -> f64 {
+        f64::from_bits(self.histogram_threshold.load(Ordering::Relaxed))
+    }
+
+    pub fn set_phash_threshold(&self, val: u32) {
+        self.phash_threshold.store(val, Ordering::Relaxed);
+    }
+
+    pub fn set_phash_hash_size(&self, val: u32) {
+        self.phash_hash_size.store(val, Ordering::Relaxed);
+    }
+
+    pub fn set_motion_threshold(&self, val: f64) {
+        self.motion_threshold.store(val.to_bits(), Ordering::Relaxed);
+    }
+
+    pub fn set_quiet_threshold(&self, val: f64) {
+        self.quiet_threshold.store(val.to_bits(), Ordering::Relaxed);
+    }
+
+    pub fn set_histogram_threshold(&self, val: f64) {
+        self.histogram_threshold.store(val.to_bits(), Ordering::Relaxed);
+    }
+
+    /// Snapshot current values as a serializable struct.
+    pub fn snapshot(&self) -> FilterConfigSnapshot {
+        FilterConfigSnapshot {
+            phash_threshold: self.get_phash_threshold(),
+            phash_hash_size: self.get_phash_hash_size(),
+            motion_threshold: self.get_motion_threshold(),
+            quiet_threshold: self.get_quiet_threshold(),
+            histogram_threshold: self.get_histogram_threshold(),
+        }
+    }
+}
+
+impl std::fmt::Debug for LiveFilterParams {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LiveFilterParams")
+            .field("phash_threshold", &self.get_phash_threshold())
+            .field("phash_hash_size", &self.get_phash_hash_size())
+            .field("motion_threshold", &self.get_motion_threshold())
+            .field("quiet_threshold", &self.get_quiet_threshold())
+            .field("histogram_threshold", &self.get_histogram_threshold())
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FilterConfigSnapshot {
+    pub phash_threshold: u32,
+    pub phash_hash_size: u32,
+    pub motion_threshold: f64,
+    pub quiet_threshold: f64,
+    pub histogram_threshold: f64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -234,11 +333,11 @@ fn default_phash_hash_size() -> u32 {
 fn default_histogram_threshold() -> f64 {
     0.15
 }
-fn default_spike_ratio() -> f64 {
-    4.0
+fn default_motion_threshold() -> f64 {
+    0.05
 }
-fn default_quiet_ratio() -> f64 {
-    1.5
+fn default_quiet_threshold() -> f64 {
+    0.02
 }
 fn default_rustfs_bucket() -> String {
     "camera-frames".into()
@@ -376,4 +475,24 @@ impl Default for RecordingConfig {
             active_to_idle_consecutive_frames: default_active_to_idle(),
         }
     }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct AnnotationConfig {
+    /// URL of the video annotation API (e.g. Modal VideoChat endpoint).
+    pub url: String,
+    /// Prompt sent to the video model.
+    #[serde(default = "default_annotation_prompt")]
+    pub prompt: String,
+    /// Max number of frames the model should sample from the video.
+    #[serde(default = "default_annotation_max_frames")]
+    pub max_num_frames: u32,
+}
+
+fn default_annotation_prompt() -> String {
+    "Give a detailed description of what goes on in this video.".into()
+}
+
+fn default_annotation_max_frames() -> u32 {
+    128
 }

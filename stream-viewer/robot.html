@@ -7,6 +7,7 @@
 <link href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,500;0,700;0,800;1,400;1,500&family=IBM+Plex+Mono:wght@300;400;500;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css">
 <script src="webrtc.js"></script>
+<script src="drive.js"></script>
 </head>
 <body class="page-robot">
 
@@ -51,6 +52,8 @@
   <div class="mode-toggle">
     <button class="mode-btn active" id="btn-live">Live Feed</button>
     <button class="mode-btn" id="btn-view">View Mode</button>
+    <button class="mode-btn" id="btn-settings">Settings</button>
+    <button class="mode-btn" id="btn-control">Control</button>
   </div>
 
   <!-- Live feed container -->
@@ -89,26 +92,35 @@
       </div>
     </div>
 
-    <!-- Date range bar -->
-    <div class="date-range-bar">
-      <input type="date" id="date-start">
-      <span>to</span>
-      <input type="date" id="date-end">
-      <button class="btn-ghost" id="btn-load-range">Load</button>
+    <!-- Date selector button -->
+    <div class="date-selector">
+      <button class="btn-ghost" id="btn-date-select">Select start and end date</button>
       <span id="segment-count" class="text-dim" style="margin-left:8px;"></span>
+      <button class="btn-ghost" id="btn-ask-question" style="margin-left:12px;">Ask a Question</button>
+      <div class="question-inline" id="question-panel" style="display:none;">
+        <input type="text" id="question-input" class="question-input" placeholder="Ask about this time interval...">
+        <button class="btn-primary-sm" id="btn-submit-question" disabled>Submit</button>
+      </div>
+      <div id="qa-progress" style="display:none; margin-top:8px; padding:12px 16px; border:1px solid var(--border); border-radius:4px; background:var(--cream); font-family:'IBM Plex Mono',monospace; font-size:13px;">
+        <div id="qa-status" style="color:var(--text-dim); margin-bottom:4px;"></div>
+        <div id="qa-answer" style="display:none; margin-top:8px; padding:12px; border:1px solid var(--border-hi); border-radius:4px; background:white; line-height:1.6;"></div>
+      </div>
     </div>
 
-    <!-- Data calendar -->
-    <div class="data-calendar" id="data-calendar" style="display:none;">
-      <div class="cal-nav">
-        <button class="btn-ghost cal-nav-btn" id="cal-prev">&#x2039;</button>
-        <span class="cal-month-label" id="cal-month-label"></span>
-        <button class="btn-ghost cal-nav-btn" id="cal-next">&#x203a;</button>
+    <!-- Calendar overlay -->
+    <div class="cal-overlay" id="cal-overlay" style="display:none;">
+      <div class="cal-overlay-backdrop" id="cal-backdrop"></div>
+      <div class="data-calendar" id="data-calendar">
+        <div class="cal-nav">
+          <button class="btn-ghost cal-nav-btn" id="cal-prev">&#x2039;</button>
+          <span class="cal-month-label" id="cal-month-label"></span>
+          <button class="btn-ghost cal-nav-btn" id="cal-next">&#x203a;</button>
+        </div>
+        <div class="cal-weekdays">
+          <span>Su</span><span>Mo</span><span>Tu</span><span>We</span><span>Th</span><span>Fr</span><span>Sa</span>
+        </div>
+        <div class="cal-grid" id="cal-grid"></div>
       </div>
-      <div class="cal-weekdays">
-        <span>Su</span><span>Mo</span><span>Tu</span><span>We</span><span>Th</span><span>Fr</span><span>Sa</span>
-      </div>
-      <div class="cal-grid" id="cal-grid"></div>
     </div>
 
     <!-- Playback area -->
@@ -151,19 +163,115 @@
       <span class="text-dim" id="time-display"></span>
     </div>
 
+    <!-- Segment info bar (shown when viewing a segment) -->
+    <div class="segment-info-bar" id="segment-info-bar" style="display:none;">
+      <span class="segment-info-text" id="segment-info-text"></span>
+      <button class="btn-delete-segment" id="btn-delete-segment">
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M5.5 5.5A.5.5 0 016 6v6a.5.5 0 01-1 0V6a.5.5 0 01.5-.5zm2.5 0a.5.5 0 01.5.5v6a.5.5 0 01-1 0V6a.5.5 0 01.5-.5zm3 .5a.5.5 0 00-1 0v6a.5.5 0 001 0V6z"/><path fill-rule="evenodd" d="M14.5 3a1 1 0 01-1 1H13v9a2 2 0 01-2 2H5a2 2 0 01-2-2V4h-.5a1 1 0 010-2H6a1 1 0 011-1h2a1 1 0 011 1h3.5a1 1 0 011 1zM4.118 4L4 4.059V13a1 1 0 001 1h6a1 1 0 001-1V4.059L11.882 4H4.118zM6 1.5a.5.5 0 01.5-.5h3a.5.5 0 010 1h-3a.5.5 0 01-.5-.5z"/></svg>
+        Delete Segment
+      </button>
+    </div>
+
     <!-- Label & save bar (shown when clip selected) -->
     <div class="label-bar" id="label-bar" style="display:none;">
       <div class="clip-info" id="clip-info"></div>
       <input type="text" id="label-input" class="input-sm" placeholder="Labels (comma separated)">
       <button class="btn-primary-sm" id="btn-save-clip">Save to Collection</button>
+      <button class="btn-delete-segment" id="btn-delete-selection">
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M5.5 5.5A.5.5 0 016 6v6a.5.5 0 01-1 0V6a.5.5 0 01.5-.5zm2.5 0a.5.5 0 01.5.5v6a.5.5 0 01-1 0V6a.5.5 0 01.5-.5zm3 .5a.5.5 0 00-1 0v6a.5.5 0 001 0V6z"/><path fill-rule="evenodd" d="M14.5 3a1 1 0 01-1 1H13v9a2 2 0 01-2 2H5a2 2 0 01-2-2V4h-.5a1 1 0 010-2H6a1 1 0 011-1h2a1 1 0 011 1h3.5a1 1 0 011 1zM4.118 4L4 4.059V13a1 1 0 001 1h6a1 1 0 001-1V4.059L11.882 4H4.118zM6 1.5a.5.5 0 01.5-.5h3a.5.5 0 010 1h-3a.5.5 0 01-.5-.5z"/></svg>
+        Delete Selection
+      </button>
     </div>
 
     <!-- Download bar (shown when collection selected) -->
     <div class="download-bar" id="download-bar" style="display:none;">
       <span id="download-collection-name"></span>
       <span class="text-dim" id="download-size"></span>
-      <button class="btn-ghost" id="btn-download">Download</button>
+      <button class="btn-ghost" id="btn-download-zip">Download Segments (ZIP)</button>
+      <button class="btn-ghost" id="btn-download-mp4">Download Stitched (MP4)</button>
     </div>
+  </div>
+
+  <!-- Settings container (hidden by default) -->
+  <div id="settings-container" style="display:none;">
+    <div class="settings-panel">
+      <div class="settings-header">Filter Parameters</div>
+      <div class="settings-sub">Changes apply instantly to all running pipelines</div>
+
+      <div class="setting-group">
+        <div class="setting-group-title">pHash Filter (JPEG)</div>
+
+        <div class="setting-row">
+          <label class="setting-label" for="s-phash-threshold">
+            phash_threshold
+            <span class="setting-hint">Hamming distance (0-256). Higher = less sensitive. If you expect movement to happen in a small set of your whole image, keep this smaller so it picks up on the changes. </span>
+          </label>
+          <div class="setting-control">
+            <input type="range" id="s-phash-threshold" min="0" max="128" step="1" value="20">
+            <span class="setting-value" id="v-phash-threshold">20</span>
+          </div>
+        </div>
+
+        <div class="setting-row">
+          <label class="setting-label" for="s-phash-hash-size">
+            phash_hash_size
+            <span class="setting-hint">Hash grid NxN. 16 = 256 bits. Larger = more detail.</span>
+          </label>
+          <div class="setting-control">
+            <input type="range" id="s-phash-hash-size" min="4" max="32" step="2" value="16">
+            <span class="setting-value" id="v-phash-hash-size">16</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="setting-group">
+        <div class="setting-group-title">Motion Filter (H.264)</div>
+
+        <div class="setting-row">
+          <label class="setting-label" for="s-motion-threshold">
+            motion_threshold
+            <span class="setting-hint">Motion ratio above this = active. (0.0 - 1.0)</span>
+          </label>
+          <div class="setting-control">
+            <input type="range" id="s-motion-threshold" min="0" max="1" step="0.005" value="0.05">
+            <span class="setting-value" id="v-motion-threshold">0.050</span>
+          </div>
+        </div>
+
+        <div class="setting-row">
+          <label class="setting-label" for="s-quiet-threshold">
+            quiet_threshold
+            <span class="setting-hint">Motion ratio below this = quiet (idle). Should be &lt; motion.</span>
+          </label>
+          <div class="setting-control">
+            <input type="range" id="s-quiet-threshold" min="0" max="1" step="0.005" value="0.02">
+            <span class="setting-value" id="v-quiet-threshold">0.020</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="setting-group">
+        <div class="setting-group-title">Histogram Filter</div>
+
+        <div class="setting-row">
+          <label class="setting-label" for="s-histogram-threshold">
+            histogram_threshold
+            <span class="setting-hint">Chi-squared distance threshold. (0.0 - 1.0)</span>
+          </label>
+          <div class="setting-control">
+            <input type="range" id="s-histogram-threshold" min="0" max="1" step="0.01" value="0.15">
+            <span class="setting-value" id="v-histogram-threshold">0.15</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-status" id="settings-status"></div>
+    </div>
+  </div>
+
+  <!-- Control mode container (hidden by default) -->
+  <div id="control-container" style="display:none;">
+    <div id="control-wasd-area"></div>
   </div>
 </main>
 
@@ -215,8 +323,8 @@ const $liveContainer  = document.getElementById('live-container');
 const $viewContainer  = document.getElementById('view-container');
 const $btnLive        = document.getElementById('btn-live');
 const $btnView        = document.getElementById('btn-view');
-const $dateStart      = document.getElementById('date-start');
-const $dateEnd        = document.getElementById('date-end');
+const $calOverlay     = document.getElementById('cal-overlay');
+const $btnDateSelect  = document.getElementById('btn-date-select');
 const $segCount       = document.getElementById('segment-count');
 const $playbackBox    = document.getElementById('playback-box');
 const $playbackOverlay= document.getElementById('playback-overlay');
@@ -258,22 +366,31 @@ function formatBytes(bytes) {
 // ── Mode toggle ──────────────────────────────────────────────────────────
 $btnLive.addEventListener('click', () => switchMode('live'));
 $btnView.addEventListener('click', () => switchMode('view'));
+document.getElementById('btn-control').addEventListener('click', () => switchMode('control'));
 
 function switchMode(mode) {
+  // Exit control mode if leaving it
+  if (vs.mode === 'control' && mode !== 'control') exitControlMode();
   vs.mode = mode;
   $btnLive.classList.toggle('active', mode === 'live');
   $btnView.classList.toggle('active', mode === 'view');
-  $liveContainer.style.display = mode === 'live' ? '' : 'none';
+  document.getElementById('btn-settings').classList.toggle('active', mode === 'settings');
+  document.getElementById('btn-control').classList.toggle('active', mode === 'control');
+  // Keep live video visible in both live and control modes
+  $liveContainer.style.display = (mode === 'live' || mode === 'control') ? '' : 'none';
   $viewContainer.style.display = mode === 'view' ? '' : 'none';
-  document.getElementById('fig-sub').textContent = mode === 'live' ? 'live feed' : 'view mode';
+  document.getElementById('settings-container').style.display = mode === 'settings' ? '' : 'none';
+  document.getElementById('control-container').style.display = mode === 'control' ? '' : 'none';
+  const subs = { live: 'live feed', view: 'view mode', settings: 'filter tuning', control: 'control mode' };
+  document.getElementById('fig-sub').textContent = subs[mode] || mode;
 
   if (mode === 'view') {
     fetchCollections();
     fetchActiveDates();
-    // Default date range: today
-    const today = new Date().toISOString().slice(0, 10);
-    if (!$dateStart.value) $dateStart.value = today;
-    if (!$dateEnd.value)   $dateEnd.value   = today;
+  } else if (mode === 'settings') {
+    fetchFilterConfig();
+  } else if (mode === 'control') {
+    enterControlMode();
   } else {
     stopPlayback();
   }
@@ -344,12 +461,10 @@ if(!url && !webrtcUrl){
 }
 
 // ── Timeline / segment loading ───────────────────────────────────────────
-document.getElementById('btn-load-range').addEventListener('click', loadTimeline);
-
 async function loadTimeline() {
-  const startDate = $dateStart.value;
-  const endDate   = $dateEnd.value;
-  if (!startDate || !endDate) return;
+  if (!calSelectStart) return;
+  const startDate = calSelectStart;
+  const endDate   = calSelectEnd || calSelectStart;
 
   const startMs = new Date(startDate).getTime();
   const endMs   = new Date(endDate + 'T23:59:59.999').getTime();
@@ -389,6 +504,14 @@ async function loadTimeline() {
 }
 
 // ── Scrubber rendering ───────────────────────────────────────────────────
+function formatDuration(ms) {
+  const totalSec = Math.round(ms / 1000);
+  if (totalSec < 60) return totalSec + 's';
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  return s > 0 ? m + 'm ' + s + 's' : m + 'm';
+}
+
 function renderScrubber() {
   $scrubTrack.innerHTML = '';
   const totalMs = vs.rangeEndMs - vs.rangeStartMs;
@@ -397,12 +520,24 @@ function renderScrubber() {
   for (const seg of vs.segments) {
     const left  = ((seg.start_ms - vs.rangeStartMs) / totalMs) * 100;
     const width = ((seg.end_ms - seg.start_ms) / totalMs) * 100;
-    const el = document.createElement('div');
-    el.className = `scrubber-segment ${seg.type}`;
-    el.style.left  = Math.max(0, left) + '%';
-    el.style.width = Math.max(0.2, width) + '%';
-    el.title = `${seg.type} | ${msToTime(seg.start_ms)} - ${msToTime(seg.end_ms)}`;
-    $scrubTrack.appendChild(el);
+
+    if (seg.type === 'active') {
+      const el = document.createElement('div');
+      el.className = 'scrubber-segment active';
+      el.style.left  = Math.max(0, left) + '%';
+      el.style.width = Math.max(0.2, width) + '%';
+      el.title = `${msToTime(seg.start_ms)} - ${msToTime(seg.end_ms)}`;
+      $scrubTrack.appendChild(el);
+    } else {
+      // Idle flag marker
+      const flag = document.createElement('div');
+      flag.className = 'scrubber-idle-flag';
+      flag.style.left = Math.max(0, left) + '%';
+      const dur = seg.end_ms - seg.start_ms;
+      flag.textContent = 'idle: ' + formatDuration(dur);
+      flag.title = `${msToTime(seg.start_ms)} - ${msToTime(seg.end_ms)}`;
+      $scrubTrack.appendChild(flag);
+    }
   }
 }
 
@@ -424,6 +559,7 @@ document.addEventListener('mouseup', () => {
   if (scrubDragging && pendingScrubTs !== null) {
     seekToTimestamp(pendingScrubTs);
     pendingScrubTs = null;
+    startPlayback();
   }
   scrubDragging = false;
 });
@@ -441,6 +577,7 @@ function scrubToX(clientX) {
   $scrubHandle.style.left = (pct * 100) + '%';
   $timeCurrent.textContent = msToTime(ts);
   seekToTimestamp(ts);
+  startPlayback();
 }
 
 // ── Seek to timestamp ────────────────────────────────────────────────────
@@ -475,14 +612,31 @@ function seekToTimestamp(ts) {
   if (seg.type === 'active') {
     showVideo(seg, ts);
   } else {
-    showIdleImage(seg);
+    // Scrubbed into an idle gap — snap to the nearest active segment
+    const nextActive = vs.segments.find((s, i) => i > segIdx && s.type === 'active');
+    const prevActive = vs.segments.slice(0, segIdx).reverse().find(s => s.type === 'active');
+    const snapSeg = nextActive || prevActive;
+    if (snapSeg) {
+      vs.currentSegmentIdx = vs.segments.indexOf(snapSeg);
+      const snapTs = snapSeg === nextActive ? snapSeg.start_ms : snapSeg.end_ms - 100;
+      updateScrubberPosition(snapTs);
+      showVideo(snapSeg, snapTs);
+    } else {
+      $playbackOvText.textContent = 'No video segments';
+      $playbackOverlay.style.display = 'flex';
+    }
   }
 }
 
 function showVideo(seg, ts) {
+  updateSegmentInfoBar(seg);
   const videoUrl = `${apiBase}/robots/${robotId}/segments/${seg.id}/video`;
   $img.style.display = 'none';
   $video.style.display = 'block';
+
+  // Clear stale handlers so a previous playFromCurrent doesn't snap the scrubber back.
+  $video.ontimeupdate = null;
+  $video.onended = null;
 
   // Only reload if different segment
   if ($video.dataset.segId !== String(seg.id)) {
@@ -555,34 +709,32 @@ function playFromCurrent() {
   if (!vs.isPlaying || vs.currentSegmentIdx < 0) return;
   const seg = vs.segments[vs.currentSegmentIdx];
 
-  if (seg.type === 'active') {
-    const wasSameSeg = $video.dataset.segId === String(seg.id);
-
-    if (!wasSameSeg) {
-      // New segment — load it and start from the beginning.
-      showVideo(seg, seg.start_ms);
-      $video.addEventListener('canplay', function onReady() {
-        $video.removeEventListener('canplay', onReady);
-        if (vs.isPlaying) {
-          $video.play().catch(e => { if (e.name !== 'AbortError') console.warn('play() error:', e); });
-        }
-      });
-    } else {
-      // Same segment already loaded — play from the current scrubbed position.
-      $video.play().catch(e => { if (e.name !== 'AbortError') console.warn('play() error:', e); });
-    }
-
-    $video.onended = () => advanceToNextSegment(vs.currentSegmentIdx + 1);
-    $video.ontimeupdate = () => {
-      if (!vs.isPlaying) return;
-      const currentTs = seg.start_ms + $video.currentTime * 1000;
-      updateScrubberPosition(currentTs);
-    };
-  } else {
-    showIdleImage(seg);
-    updateScrubberPosition(seg.start_ms);
-    playbackTimer = setTimeout(() => advanceToNextSegment(vs.currentSegmentIdx + 1), 750);
+  // Skip idle segments — jump straight to next active segment
+  if (seg.type !== 'active') {
+    advanceToNextSegment(vs.currentSegmentIdx + 1);
+    return;
   }
+
+  const wasSameSeg = $video.dataset.segId === String(seg.id);
+
+  if (!wasSameSeg) {
+    showVideo(seg, seg.start_ms);
+    $video.addEventListener('canplay', function onReady() {
+      $video.removeEventListener('canplay', onReady);
+      if (vs.isPlaying) {
+        $video.play().catch(e => { if (e.name !== 'AbortError') console.warn('play() error:', e); });
+      }
+    });
+  } else {
+    $video.play().catch(e => { if (e.name !== 'AbortError') console.warn('play() error:', e); });
+  }
+
+  $video.onended = () => advanceToNextSegment(vs.currentSegmentIdx + 1);
+  $video.ontimeupdate = () => {
+    if (!vs.isPlaying) return;
+    const currentTs = seg.start_ms + $video.currentTime * 1000;
+    updateScrubberPosition(currentTs);
+  };
 }
 
 function advanceToNextSegment(nextIdx) {
@@ -619,40 +771,40 @@ function playClipRange() {
   vs.currentSegmentIdx = startIdx;
   const seg = vs.segments[startIdx];
 
-  if (seg.type === 'active') {
-    const seekTs = Math.max(startMs, seg.start_ms);
-    const wasSameSeg = $video.dataset.segId === String(seg.id);
-    showVideo(seg, seekTs);
-
-    const doPlay = () => {
-      $video.play().catch(e => { if (e.name !== 'AbortError') console.warn('play() error:', e); });
-    };
-
-    if (!wasSameSeg) {
-      $video.addEventListener('canplay', function onReady() {
-        $video.removeEventListener('canplay', onReady);
-        if (vs.isPlaying) doPlay();
-      });
-    } else {
-      doPlay();
-    }
-
-    $video.ontimeupdate = () => {
-      if (!vs.isPlaying) return;
-      const currentTs = seg.start_ms + $video.currentTime * 1000;
-      updateScrubberPosition(currentTs);
-      if (currentTs >= endMs) {
-        stopPlayback();
-      } else if (currentTs >= seg.end_ms) {
-        advanceToNextSegment(vs.currentSegmentIdx + 1);
-      }
-    };
-    $video.onended = () => advanceToNextSegment(vs.currentSegmentIdx + 1);
-  } else {
-    showIdleImage(seg);
-    updateScrubberPosition(Math.max(seg.start_ms, startMs));
-    playbackTimer = setTimeout(() => advanceToNextSegment(vs.currentSegmentIdx + 1), 750);
+  // Skip idle segments in clip playback too
+  if (seg.type !== 'active') {
+    advanceToNextSegment(vs.currentSegmentIdx + 1);
+    return;
   }
+
+  const seekTs = Math.max(startMs, seg.start_ms);
+  const wasSameSeg = $video.dataset.segId === String(seg.id);
+  showVideo(seg, seekTs);
+
+  const doPlay = () => {
+    $video.play().catch(e => { if (e.name !== 'AbortError') console.warn('play() error:', e); });
+  };
+
+  if (!wasSameSeg) {
+    $video.addEventListener('canplay', function onReady() {
+      $video.removeEventListener('canplay', onReady);
+      if (vs.isPlaying) doPlay();
+    });
+  } else {
+    doPlay();
+  }
+
+  $video.ontimeupdate = () => {
+    if (!vs.isPlaying) return;
+    const currentTs = seg.start_ms + $video.currentTime * 1000;
+    updateScrubberPosition(currentTs);
+    if (currentTs >= endMs) {
+      stopPlayback();
+    } else if (currentTs >= seg.end_ms) {
+      advanceToNextSegment(vs.currentSegmentIdx + 1);
+    }
+  };
+  $video.onended = () => advanceToNextSegment(vs.currentSegmentIdx + 1);
 }
 
 function updateScrubberPosition(ts) {
@@ -719,7 +871,7 @@ document.addEventListener('mouseup', () => { clipDrag = null; });
 // Press Escape to clear clip selection
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') clearClipSelection();
-  if (e.key === ' ' && vs.mode === 'view') {
+  if (e.key === ' ' && vs.mode === 'view' && !['INPUT','TEXTAREA'].includes(document.activeElement.tagName)) {
     e.preventDefault();
     vs.isPlaying ? stopPlayback() : startPlayback();
   }
@@ -862,20 +1014,234 @@ async function saveClip() {
 }
 
 // ── Download ─────────────────────────────────────────────────────────────
-document.getElementById('btn-download').addEventListener('click', async () => {
+async function downloadMedia(format) {
   if (!vs.activeCollection) return;
+  const $btn = document.getElementById(format === 'mp4' ? 'btn-download-mp4' : 'btn-download-zip');
+  const $size = document.getElementById('download-size');
+  const origText = $btn.textContent;
+
+  // Check size first
   try {
-    const resp = await fetch(`${apiBase}/robots/${robotId}/collections/${vs.activeCollection.id}/clips`);
-    if (!resp.ok) return;
-    const clips = await resp.json();
-    const blob = new Blob([JSON.stringify(clips, null, 2)], { type: 'application/json' });
+    const infoResp = await fetch(
+      `${apiBase}/robots/${robotId}/collections/${vs.activeCollection.id}/download-info`
+    );
+    if (infoResp.ok) {
+      const info = await infoResp.json();
+      if (info.clip_count === 0) { alert('No clips in this collection'); return; }
+      if (info.total_bytes > 500 * 1024 * 1024) {
+        if (!confirm(`This collection is ${formatBytes(info.total_bytes)}. Download may take a while. Continue?`)) return;
+      }
+    }
+  } catch (_) {}
+
+  $btn.textContent = 'Preparing...';
+  $btn.disabled = true;
+
+  try {
+    const url = `${apiBase}/robots/${robotId}/collections/${vs.activeCollection.id}/download?format=${format}`;
+    console.log('[download] fetching', url);
+    const resp = await fetch(url);
+
+    if (!resp.ok) {
+      const errText = await resp.text();
+      console.error('[download] server error', resp.status, errText);
+      alert('Download failed (' + resp.status + '): ' + errText);
+      return;
+    }
+
+    const contentLength = resp.headers.get('Content-Length');
+    const total = contentLength ? parseInt(contentLength, 10) : 0;
+
+    // Stream with progress
+    const reader = resp.body.getReader();
+    const chunks = [];
+    let received = 0;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      received += value.length;
+      if (total > 0) {
+        const pct = Math.round((received / total) * 100);
+        $btn.textContent = `${pct}%`;
+        $size.textContent = `${formatBytes(received)} / ${formatBytes(total)}`;
+      } else {
+        $btn.textContent = formatBytes(received);
+      }
+    }
+
+    // Check for missing segments
+    const missing = resp.headers.get('X-Missing-Segments');
+    if (missing && parseInt(missing) > 0) {
+      alert(`Warning: ${missing} segment(s) were unavailable and skipped.`);
+    }
+
+    // Trigger browser download
+    const contentType = resp.headers.get('Content-Type') || (format === 'mp4' ? 'video/mp4' : 'application/zip');
+    const blob = new Blob(chunks, { type: contentType });
+    const safeName = vs.activeCollection.name.replace(/\s+/g, '_');
+    const contentDisp = resp.headers.get('Content-Disposition');
+    let filename = format === 'mp4' ? `${safeName}.mp4` : `${safeName}_segments.zip`;
+    if (contentDisp) {
+      const match = contentDisp.match(/filename="?([^"]+)"?/);
+      if (match) filename = match[1];
+    }
+
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = `${vs.activeCollection.name.replace(/\s+/g, '_')}_clips.json`;
+    a.download = filename;
     a.click();
     URL.revokeObjectURL(a.href);
+
+    $btn.textContent = 'Downloaded!';
+    setTimeout(() => { $btn.textContent = origText; }, 2000);
   } catch (e) {
-    console.error('Download failed:', e);
+    console.error('[download] exception:', e);
+    alert('Download failed: ' + (e.message || e));
+  } finally {
+    $btn.disabled = false;
+    if ($btn.textContent !== 'Downloaded!') $btn.textContent = origText;
+  }
+}
+
+document.getElementById('btn-download-zip').addEventListener('click', () => downloadMedia('zip'));
+document.getElementById('btn-download-mp4').addEventListener('click', () => downloadMedia('mp4'));
+
+// ── Segment info bar & delete ─────────────────────────────────────────────
+const $segInfoBar   = document.getElementById('segment-info-bar');
+const $segInfoText  = document.getElementById('segment-info-text');
+const $btnDeleteSeg = document.getElementById('btn-delete-segment');
+
+function updateSegmentInfoBar(seg) {
+  if (!seg || seg.type !== 'active') {
+    $segInfoBar.style.display = 'none';
+    return;
+  }
+  const dur = formatDuration(seg.end_ms - seg.start_ms);
+  const size = seg.size_bytes ? formatBytes(seg.size_bytes) : '?';
+  $segInfoText.textContent = `Segment #${seg.id} · ${msToTime(seg.start_ms)} – ${msToTime(seg.end_ms)} · ${dur} · ${size}`;
+  $segInfoBar.style.display = 'flex';
+  $btnDeleteSeg.disabled = false;
+  $btnDeleteSeg.textContent = '';
+  $btnDeleteSeg.innerHTML = '<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M5.5 5.5A.5.5 0 016 6v6a.5.5 0 01-1 0V6a.5.5 0 01.5-.5zm2.5 0a.5.5 0 01.5.5v6a.5.5 0 01-1 0V6a.5.5 0 01.5-.5zm3 .5a.5.5 0 00-1 0v6a.5.5 0 001 0V6z"/><path fill-rule="evenodd" d="M14.5 3a1 1 0 01-1 1H13v9a2 2 0 01-2 2H5a2 2 0 01-2-2V4h-.5a1 1 0 010-2H6a1 1 0 011-1h2a1 1 0 011 1h3.5a1 1 0 011 1zM4.118 4L4 4.059V13a1 1 0 001 1h6a1 1 0 001-1V4.059L11.882 4H4.118zM6 1.5a.5.5 0 01.5-.5h3a.5.5 0 010 1h-3a.5.5 0 01-.5-.5z"/></svg> Delete Segment';
+  // Store current segment id on the button for the click handler
+  $btnDeleteSeg.dataset.segId = seg.id;
+}
+
+$btnDeleteSeg.addEventListener('click', async () => {
+  const segId = $btnDeleteSeg.dataset.segId;
+  if (!segId) return;
+
+  const seg = vs.segments.find(s => String(s.id) === String(segId));
+  const desc = seg
+    ? `Segment #${segId} (${msToTime(seg.start_ms)} – ${msToTime(seg.end_ms)})`
+    : `Segment #${segId}`;
+
+  if (!confirm(`Permanently delete ${desc}?\n\nThis removes it from both local and cloud storage. This cannot be undone.`)) {
+    return;
+  }
+
+  $btnDeleteSeg.disabled = true;
+  $btnDeleteSeg.textContent = 'Deleting...';
+
+  try {
+    const resp = await fetch(`${apiBase}/robots/${robotId}/segments/${segId}`, {
+      method: 'DELETE',
+    });
+    if (!resp.ok) {
+      const msg = await resp.text();
+      alert('Delete failed: ' + msg);
+      $btnDeleteSeg.disabled = false;
+      $btnDeleteSeg.textContent = 'Delete Segment';
+      return;
+    }
+
+    // Remove from local state and refresh
+    vs.segments = vs.segments.filter(s => String(s.id) !== String(segId));
+    $segInfoBar.style.display = 'none';
+    stopPlayback();
+
+    // Re-render scrubber with remaining segments
+    if (vs.segments.length > 0) {
+      renderScrubber();
+      $segCount.textContent = `${vs.segments.length} segments`;
+      // Seek to the next segment
+      const nextSeg = vs.segments[Math.min(vs.currentSegmentIdx, vs.segments.length - 1)];
+      if (nextSeg) seekToTimestamp(nextSeg.start_ms);
+    } else {
+      $scrubTrack.innerHTML = '';
+      $segCount.textContent = '0 segments';
+      $playbackOvText.textContent = 'No data in this range';
+      $playbackOverlay.style.display = 'flex';
+      $video.style.display = 'none';
+    }
+  } catch (e) {
+    console.error('Delete segment error:', e);
+    alert('Delete failed: ' + e.message);
+    $btnDeleteSeg.disabled = false;
+    $btnDeleteSeg.textContent = 'Delete Segment';
+  }
+});
+
+// ── Delete selection (bulk delete all segments in clip range) ─────────────
+const $btnDeleteSelection = document.getElementById('btn-delete-selection');
+$btnDeleteSelection.addEventListener('click', async () => {
+  if (!vs.clipSelection) return;
+  const { startMs, endMs } = vs.clipSelection;
+
+  const segmentsInRange = vs.segments.filter(s =>
+    s.start_ms >= startMs && s.end_ms <= endMs
+  );
+
+  const desc = `${segmentsInRange.length} segment(s) between ${msToTime(startMs)} and ${msToTime(endMs)}`;
+  if (!confirm(`Permanently delete ${desc}?\n\nThis removes all segments and images in this interval from both local and cloud storage. This cannot be undone.`)) {
+    return;
+  }
+
+  $btnDeleteSelection.disabled = true;
+  $btnDeleteSelection.textContent = 'Deleting...';
+
+  try {
+    const params = new URLSearchParams({ start_ms: Math.floor(startMs), end_ms: Math.floor(endMs) });
+    const resp = await fetch(`${apiBase}/robots/${robotId}/segments?${params}`, {
+      method: 'DELETE',
+    });
+    if (!resp.ok) {
+      const msg = await resp.text();
+      alert('Delete failed: ' + msg);
+      return;
+    }
+
+    const result = await resp.json();
+    console.log(`Deleted ${result.deleted} segment(s)`);
+
+    // Remove deleted segments from local state
+    vs.segments = vs.segments.filter(s =>
+      !(s.start_ms >= startMs && s.end_ms <= endMs)
+    );
+    clearClipSelection();
+    stopPlayback();
+    $segInfoBar.style.display = 'none';
+
+    if (vs.segments.length > 0) {
+      renderScrubber();
+      $segCount.textContent = `${vs.segments.length} segments`;
+      const nextSeg = vs.segments[Math.min(vs.currentSegmentIdx, vs.segments.length - 1)];
+      if (nextSeg) seekToTimestamp(nextSeg.start_ms);
+    } else {
+      $scrubTrack.innerHTML = '';
+      $segCount.textContent = '0 segments';
+      $playbackOvText.textContent = 'No data in this range';
+      $playbackOverlay.style.display = 'flex';
+      $video.style.display = 'none';
+    }
+  } catch (e) {
+    console.error('Delete selection error:', e);
+    alert('Delete failed: ' + e.message);
+  } finally {
+    $btnDeleteSelection.disabled = false;
+    $btnDeleteSelection.innerHTML = '<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M5.5 5.5A.5.5 0 016 6v6a.5.5 0 01-1 0V6a.5.5 0 01.5-.5zm2.5 0a.5.5 0 01.5.5v6a.5.5 0 01-1 0V6a.5.5 0 01.5-.5zm3 .5a.5.5 0 00-1 0v6a.5.5 0 001 0V6z"/><path fill-rule="evenodd" d="M14.5 3a1 1 0 01-1 1H13v9a2 2 0 01-2 2H5a2 2 0 01-2-2V4h-.5a1 1 0 010-2H6a1 1 0 011-1h2a1 1 0 011 1h3.5a1 1 0 011 1zM4.118 4L4 4.059V13a1 1 0 001 1h6a1 1 0 001-1V4.059L11.882 4H4.118zM6 1.5a.5.5 0 01.5-.5h3a.5.5 0 010 1h-3a.5.5 0 01-.5-.5z"/></svg> Delete Selection';
   }
 });
 
@@ -883,16 +1249,15 @@ document.getElementById('btn-download').addEventListener('click', async () => {
 let activeDatesSet = new Set(); // YYYY-MM-DD strings
 let calYear = new Date().getFullYear();
 let calMonth = new Date().getMonth(); // 0-indexed
+let calSelectStart = null; // YYYY-MM-DD
+let calSelectEnd = null;
 
-const $calendar    = document.getElementById('data-calendar');
 const $calGrid     = document.getElementById('cal-grid');
 const $calLabel    = document.getElementById('cal-month-label');
 const $calPrev     = document.getElementById('cal-prev');
 const $calNext     = document.getElementById('cal-next');
 
 async function fetchActiveDates() {
-  // Always show the calendar; populate data-dots if the API responds
-  $calendar.style.display = '';
   renderCalendar();
   try {
     const resp = await fetch(`${apiBase}/robots/${robotId}/active-dates`, {signal: AbortSignal.timeout(8000)});
@@ -934,18 +1299,21 @@ function renderCalendar() {
     const dateStr = `${calYear}-${String(calMonth+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
     const hasData = activeDatesSet.has(dateStr);
     const isToday = dateStr === today;
+    const isSelected = dateStr === calSelectStart || dateStr === calSelectEnd;
+    const isInRange = calSelectStart && calSelectEnd && calSelectStart !== calSelectEnd
+      && dateStr > calSelectStart && dateStr < calSelectEnd;
 
     const cell = document.createElement('div');
-    cell.className = 'cal-cell' + (hasData ? ' has-data' : '') + (isToday ? ' is-today' : '');
+    cell.className = 'cal-cell'
+      + (hasData ? ' has-data' : '')
+      + (isToday ? ' is-today' : '')
+      + (isSelected ? ' cal-selected' : '')
+      + (isInRange ? ' cal-in-range' : '');
     cell.innerHTML = `<span class="cal-day-num">${day}</span>${hasData ? '<span class="cal-dot"></span>' : ''}`;
     cell.title = hasData ? `${dateStr} — has data` : dateStr;
 
     if (hasData) {
-      cell.addEventListener('click', () => {
-        document.getElementById('date-start').value = dateStr;
-        document.getElementById('date-end').value   = dateStr;
-        loadTimeline();
-      });
+      cell.addEventListener('click', () => selectCalDate(dateStr));
     }
     $calGrid.appendChild(cell);
   }
@@ -962,9 +1330,318 @@ $calNext.addEventListener('click', () => {
   renderCalendar();
 });
 
+// ── Calendar overlay & date selection ────────────────────────────────────
+$btnDateSelect.addEventListener('click', () => {
+  $calOverlay.style.display = $calOverlay.style.display === 'none' ? 'flex' : 'none';
+});
+
+document.getElementById('cal-backdrop').addEventListener('click', () => {
+  if (calSelectStart && !calSelectEnd) {
+    calSelectEnd = calSelectStart;
+    updateDateButtonLabel();
+    loadTimeline();
+  }
+  $calOverlay.style.display = 'none';
+});
+
+function selectCalDate(dateStr) {
+  if (!calSelectStart || (calSelectStart && calSelectEnd)) {
+    // Starting new selection
+    calSelectStart = dateStr;
+    calSelectEnd = null;
+    updateDateButtonLabel();
+    renderCalendar();
+  } else {
+    // Second click completes selection
+    calSelectEnd = dateStr;
+    if (calSelectStart > calSelectEnd) {
+      [calSelectStart, calSelectEnd] = [calSelectEnd, calSelectStart];
+    }
+    updateDateButtonLabel();
+    renderCalendar();
+    $calOverlay.style.display = 'none';
+    loadTimeline();
+  }
+}
+
+function updateDateButtonLabel() {
+  if (!calSelectStart) {
+    $btnDateSelect.textContent = 'Select start and end date';
+  } else if (!calSelectEnd || calSelectStart === calSelectEnd) {
+    $btnDateSelect.textContent = calSelectStart;
+  } else {
+    $btnDateSelect.textContent = calSelectStart + '  \u2192  ' + calSelectEnd;
+  }
+}
+
+// ── Settings mode ─────────────────────────────────────────────────────────
+const $settingsContainer = document.getElementById('settings-container');
+const $btnSettings       = document.getElementById('btn-settings');
+const $settingsStatus    = document.getElementById('settings-status');
+
+// Derive mgmt API base from apiBase (replace port with 8081)
+let mgmtBase = apiBase.replace(/:\d+$/, ':8081');
+(async () => {
+  try {
+    const res = await fetch('sources.json');
+    const data = await res.json();
+    if (data.mgmt_url) mgmtBase = data.mgmt_url;
+  } catch (_) {}
+})();
+
+$btnSettings.addEventListener('click', () => switchMode('settings'));
+
+// Slider elements
+const sliders = {
+  phash_threshold:     { el: document.getElementById('s-phash-threshold'),     val: document.getElementById('v-phash-threshold'),     fmt: v => String(v) },
+  phash_hash_size:     { el: document.getElementById('s-phash-hash-size'),     val: document.getElementById('v-phash-hash-size'),     fmt: v => String(v) },
+  motion_threshold:    { el: document.getElementById('s-motion-threshold'),    val: document.getElementById('v-motion-threshold'),    fmt: v => Number(v).toFixed(3) },
+  quiet_threshold:     { el: document.getElementById('s-quiet-threshold'),     val: document.getElementById('v-quiet-threshold'),     fmt: v => Number(v).toFixed(3) },
+  histogram_threshold: { el: document.getElementById('s-histogram-threshold'), val: document.getElementById('v-histogram-threshold'), fmt: v => Number(v).toFixed(2) },
+};
+
+// Debounced PATCH — sends update 300ms after last slider change
+let patchTimer = null;
+let pendingPatch = {};
+
+function queuePatch(key, value) {
+  pendingPatch[key] = Number(value);
+  clearTimeout(patchTimer);
+  patchTimer = setTimeout(sendPatch, 300);
+}
+
+async function sendPatch() {
+  const body = { ...pendingPatch };
+  pendingPatch = {};
+  try {
+    const resp = await fetch(`${mgmtBase}/config/filter`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    $settingsStatus.textContent = 'Updated';
+    $settingsStatus.style.color = 'var(--green)';
+    setTimeout(() => { $settingsStatus.textContent = ''; }, 2000);
+    // Sync sliders with server response
+    applySnapshot(data);
+  } catch (e) {
+    $settingsStatus.textContent = 'Error: ' + e.message;
+    $settingsStatus.style.color = '#ff3355';
+    console.error('PATCH /config/filter error:', e);
+  }
+}
+
+function applySnapshot(snap) {
+  for (const [key, s] of Object.entries(sliders)) {
+    if (snap[key] !== undefined) {
+      s.el.value = snap[key];
+      s.val.textContent = s.fmt(snap[key]);
+    }
+  }
+}
+
+// Wire up slider input events
+for (const [key, s] of Object.entries(sliders)) {
+  s.el.addEventListener('input', () => {
+    s.val.textContent = s.fmt(s.el.value);
+    queuePatch(key, s.el.value);
+  });
+}
+
+// Fetch current config when entering settings mode
+async function fetchFilterConfig() {
+  try {
+    const resp = await fetch(`${mgmtBase}/config/filter`);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    applySnapshot(data);
+    $settingsStatus.textContent = '';
+  } catch (e) {
+    $settingsStatus.textContent = 'Could not load config: ' + e.message;
+    $settingsStatus.style.color = '#ff3355';
+    console.error('GET /config/filter error:', e);
+  }
+}
+
+// ── Ask a Question ────────────────────────────────────────────────────────
+const $questionPanel  = document.getElementById('question-panel');
+const $questionInput  = document.getElementById('question-input');
+const $btnAsk         = document.getElementById('btn-ask-question');
+const $btnSubmitQ     = document.getElementById('btn-submit-question');
+$btnAsk.addEventListener('click', () => {
+  const open = $questionPanel.style.display === 'none';
+  $questionPanel.style.display = open ? 'flex' : 'none';
+  if (open) {
+    updateQuestionState();
+    $questionInput.focus();
+  }
+});
+
+$questionInput.addEventListener('input', updateQuestionState);
+
+function getQuestionRange() {
+  if (vs.rangeStartMs != null && vs.rangeEndMs != null && vs.segments.length > 0) {
+    return { startMs: vs.rangeStartMs, endMs: vs.rangeEndMs };
+  }
+  if (calSelectStart) {
+    const startMs = new Date(calSelectStart).getTime();
+    const endDate = calSelectEnd || calSelectStart;
+    const endMs   = new Date(endDate + 'T23:59:59.999').getTime();
+    return { startMs, endMs };
+  }
+  return null;
+}
+
+function updateQuestionState() {
+  const range   = getQuestionRange();
+  const hasText = $questionInput.value.trim().length > 0;
+  $btnSubmitQ.disabled = !(range && hasText);
+}
+
+$btnSubmitQ.addEventListener('click', () => {
+  const question = $questionInput.value.trim();
+  const range = getQuestionRange();
+  if (!question || !range) return;
+
+  $btnSubmitQ.disabled = true;
+  $btnSubmitQ.textContent = 'Thinking...';
+
+  const $progress = document.getElementById('qa-progress');
+  const $status   = document.getElementById('qa-status');
+  const $answer   = document.getElementById('qa-answer');
+  $progress.style.display = 'block';
+  $answer.style.display = 'none';
+  $status.textContent = 'Querying segments...';
+  $status.style.color = '';
+
+  const params = new URLSearchParams({
+    question,
+    start_ms: range.startMs,
+    end_ms:   range.endMs,
+    branching_factor: 2,
+    beam_width: 1,
+  });
+
+  const evtSource = new EventSource(
+    `${apiBase}/robots/${robotId}/questions/stream?${params}`
+  );
+
+  evtSource.onmessage = (e) => {
+    let data;
+    try { data = JSON.parse(e.data); } catch { return; }
+    switch (data.type) {
+      case 'segments_found':
+        $status.textContent = `Found ${data.count} active segments`;
+        break;
+      case 'cache_hit':
+        $status.textContent = 'Using cached summary tree — skipping rebuild';
+        break;
+      case 'tree_building_start':
+        $status.textContent = `Building summary tree (${data.total_leaves} leaves, height ${data.height})...`;
+        break;
+      case 'node_summary':
+        $status.textContent = `Summarizing level ${data.level} (${data.total_at_level} nodes)...`;
+        break;
+      case 'tree_complete':
+        $status.textContent = 'Summary tree complete. Searching for answer...';
+        break;
+      case 'traversal_start':
+        $status.textContent = 'Traversing tree to find relevant segment...';
+        break;
+      case 'path_chosen':
+        $status.textContent = `Level ${data.level}: chose path (${(data.probability * 100).toFixed(0)}% confidence)`;
+        break;
+      case 'leaf_reached':
+        $status.textContent = `Found relevant segment (ID: ${data.segment_id})`;
+        break;
+      case 'downloading_video':
+        $status.textContent = 'Downloading video segment...';
+        break;
+      case 'stitching_videos':
+        $status.textContent = `Stitching ${data.count} video segments...`;
+        break;
+      case 'calling_video_llm':
+        $status.textContent = 'Analyzing video with AI...';
+        break;
+      case 'answer_ready':
+        $answer.style.display = 'block';
+        const segs = (data.segments || []).map(s =>
+          `Segment ${s.segment_id} (${new Date(s.start_ms).toLocaleTimeString()} - ${new Date(s.end_ms).toLocaleTimeString()})`
+        ).join(', ');
+        const verifiedTag = data.verified === false
+          ? '<span style="color:#e67e22; font-size:11px; margin-left:8px;">(unverified — video model unavailable)</span>'
+          : '';
+        $answer.innerHTML = `<strong>Answer:</strong>${verifiedTag} ${data.answer}<div style="margin-top:6px; font-size:11px; color:var(--text-dim);">${segs}</div>`;
+        $status.textContent = data.verified === false ? 'Done (unverified)' : 'Done';
+        evtSource.close();
+        resetQuestionUI();
+        break;
+      case 'error':
+        $status.textContent = `Error: ${data.message}`;
+        $status.style.color = '#ff3355';
+        evtSource.close();
+        resetQuestionUI();
+        break;
+    }
+  };
+
+  evtSource.onerror = () => {
+    $status.textContent = 'Connection lost';
+    $status.style.color = '#ff3355';
+    evtSource.close();
+    resetQuestionUI();
+  };
+});
+
+function resetQuestionUI() {
+  $btnSubmitQ.disabled = false;
+  $btnSubmitQ.textContent = 'Submit';
+  updateQuestionState();
+}
+
+// ── Control mode ─────────────────────────────────────────────────────────
+let controlWidget = null;
+let controlController = null;
+
+function enterControlMode() {
+  const stream = { url: url, webrtc_url: webrtcUrl };
+  const wsUrl = getDriveWsUrl(stream);
+  const area = document.getElementById('control-wasd-area');
+  area.innerHTML = '';
+
+  if (!wsUrl) {
+    area.innerHTML = '<div style="font-family:var(--serif);font-size:13px;color:var(--text-dim);padding:12px;">Cannot derive drive URL from stream</div>';
+    return;
+  }
+
+  controlWidget = createWasdWidget({ size: 'full' });
+  area.appendChild(controlWidget.element);
+
+  controlController = createDriveController(wsUrl, controlWidget, {
+    onConnect: function () { controlWidget.setConnected(true); },
+    onDisconnect: function () { controlWidget.setConnected(false); },
+    onError: function () { console.error('Drive connection error'); },
+    onClose: function () { switchMode('live'); }
+  });
+  controlController.connect();
+}
+
+function exitControlMode() {
+  if (controlController) { controlController.destroy(); controlController = null; }
+  if (controlWidget) { controlWidget.destroy(); controlWidget = null; }
+  var area = document.getElementById('control-wasd-area');
+  if (area) area.innerHTML = '';
+}
+
 // ── Auto-switch to view mode if URL param says so ────────────────────────
 if (initMode === 'view') {
   switchMode('view');
+} else if (initMode === 'settings') {
+  switchMode('settings');
+} else if (initMode === 'control') {
+  switchMode('control');
 }
 </script>
 </body>

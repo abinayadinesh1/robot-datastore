@@ -14,8 +14,6 @@ pub struct SegmentEncoder {
 pub struct FinishedSegment {
     pub mp4_bytes: Vec<u8>,
     pub frame_count: u32,
-    #[allow(dead_code)]
-    pub start_ms: i64,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -204,7 +202,6 @@ impl SegmentEncoder {
         Ok(FinishedSegment {
             mp4_bytes,
             frame_count: self.frame_count,
-            start_ms: self.start_ms,
         })
     }
 

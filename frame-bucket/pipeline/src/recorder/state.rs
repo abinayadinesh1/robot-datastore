@@ -1,17 +1,18 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use frame_bucket_common::config::RecordingConfig;
+use frame_bucket_common::config::{AnnotationConfig, LiveFilterParams, RecordingConfig};
 use frame_bucket_common::frame::{FramePayload, TimestampedFrame};
 use tokio::time::Instant;
 use tracing::{debug, error, info, warn};
 
 use crate::db::SegmentDb;
-use crate::filter::framesize::FrameSizeFilter;
+use crate::filter::framesize::MotionFilter;
 use crate::filter::phash::{compute_ahash, hamming};
 use crate::storage::RustfsStorage;
 
 use super::encoder::SegmentEncoder;
+use super::fps::FpsEstimator;
 use super::keys::{active_segment_key, idle_jpeg_key};
 
 #[allow(dead_code)]
@@ -47,47 +48,57 @@ enum RecordingState {
 pub struct RecordingStateMachine {
     state: Option<RecordingState>, // Option so we can take() during transitions
     config: RecordingConfig,
-    phash_threshold: u32,
-    hash_size: u32,
+    live_params: Arc<LiveFilterParams>,
     storage: Arc<RustfsStorage>,
     db: Option<Arc<SegmentDb>>,
     prefix: String,
     robot_id: String,
-    /// Frame-size heuristic filter for H.264 streams.
-    frame_size_filter: FrameSizeFilter,
+    /// Motion filter for H.264 streams (MB skip-count based).
+    motion_filter: MotionFilter,
     /// Counts frames spent in the current state (reset on transitions).
     /// Used to throttle debug logging to every 100 frames.
     frames_in_current_state: u64,
+    /// Estimates the actual FPS from incoming frame timestamps so the encoder
+    /// produces correctly-timed video regardless of the stream's real rate.
+    fps_estimator: FpsEstimator,
+    /// Optional video annotation config. When present, completed segments are
+    /// sent to the annotation API asynchronously.
+    annotation_config: Option<Arc<AnnotationConfig>>,
 }
 
 impl RecordingStateMachine {
     pub fn new(
         config: RecordingConfig,
-        phash_threshold: u32,
-        hash_size: u32,
-        spike_ratio: f64,
-        quiet_ratio: f64,
+        live_params: Arc<LiveFilterParams>,
         storage: Arc<RustfsStorage>,
         db: Option<Arc<SegmentDb>>,
         prefix: String,
         robot_id: String,
+        annotation_config: Option<Arc<AnnotationConfig>>,
     ) -> Self {
+        let motion_filter = MotionFilter::new(Arc::clone(&live_params));
+        // Use a 60-frame sliding window; fall back to config fps until we have enough samples.
+        let fps_estimator = FpsEstimator::new(60, config.fps);
         Self {
             state: None,
             config,
-            phash_threshold,
-            hash_size,
+            live_params,
             storage,
             db,
             prefix,
             robot_id,
-            frame_size_filter: FrameSizeFilter::new(spike_ratio, quiet_ratio),
+            motion_filter,
             frames_in_current_state: 0,
+            fps_estimator,
+            annotation_config,
         }
     }
 
     /// Process one incoming frame. This is the main entry point.
     pub async fn process_frame(&mut self, frame: &TimestampedFrame) {
+        // Track arrival timestamps so we can estimate the real stream FPS.
+        self.fps_estimator.push(frame.captured_at_ms);
+
         match &frame.payload {
             FramePayload::Jpeg(jpeg_data) => {
                 self.process_jpeg_frame(frame, jpeg_data).await;
@@ -103,7 +114,7 @@ impl RecordingStateMachine {
     // =========================================================================
 
     async fn process_jpeg_frame(&mut self, frame: &TimestampedFrame, jpeg_data: &[u8]) {
-        let hash = match compute_ahash(jpeg_data, self.hash_size) {
+        let hash = match compute_ahash(jpeg_data, self.live_params.get_phash_hash_size()) {
             Some(h) => h,
             None => {
                 warn!(ts = frame.captured_at_ms, "failed to compute aHash for frame, skipping");
@@ -155,12 +166,12 @@ impl RecordingStateMachine {
         let initial_hash_ref = initial_hash.as_ref().expect("JPEG idle must have hash");
         let dist = hamming(initial_hash_ref, hash);
 
-        if dist <= self.phash_threshold {
+        if dist <= self.live_params.get_phash_threshold() {
             self.frames_in_current_state += 1;
             if self.frames_in_current_state % 100 == 0 {
                 debug!(
                     dist,
-                    threshold = self.phash_threshold,
+                    threshold = self.live_params.get_phash_threshold(),
                     ts = frame.captured_at_ms,
                     frames_in_state = self.frames_in_current_state,
                     "IDLE: frame similar to baseline"
@@ -178,7 +189,7 @@ impl RecordingStateMachine {
         self.frames_in_current_state = 0;
         info!(
             dist,
-            threshold = self.phash_threshold,
+            threshold = self.live_params.get_phash_threshold(),
             idle_start_ms,
             idle_end_ms = last_similar_ms,
             "IDLE→ACTIVE: scene changed, finalizing idle record"
@@ -269,7 +280,7 @@ impl RecordingStateMachine {
         // Check Active→Idle transition (consecutive similar frames)
         let prev_hash = last_frame_hash.as_ref().expect("JPEG active must have hash");
         let dist = hamming(prev_hash, hash);
-        if dist <= self.phash_threshold {
+        if dist <= self.live_params.get_phash_threshold() {
             consecutive_idle_count += 1;
             self.frames_in_current_state += 1;
             if self.frames_in_current_state % 100 == 0 {
@@ -326,12 +337,14 @@ impl RecordingStateMachine {
         jpeg_data: &[u8],
         hash: Vec<bool>,
     ) -> Option<RecordingState> {
+        let estimated_fps = self.fps_estimator.fps();
+        info!(estimated_fps, config_fps = self.config.fps, "JPEG segment using estimated FPS");
         let mut encoder = match SegmentEncoder::start(
             frame.captured_at_ms,
             &self.config.codec,
             self.config.crf,
             &self.config.preset,
-            self.config.fps,
+            estimated_fps,
         )
         .await
         {
@@ -377,7 +390,7 @@ impl RecordingStateMachine {
         nal_type: u8,
     ) {
         let frame_size = h264_data.len();
-        let is_active = self.frame_size_filter.is_active(frame_size, nal_type);
+        let is_active = self.motion_filter.is_active(frame_size, nal_type, h264_data);
 
         // First frame ever: enter Idle.
         if self.state.is_none() {
@@ -502,7 +515,7 @@ impl RecordingStateMachine {
                 }
 
                 // Check Active→Idle: count consecutive quiet P-frames
-                if self.frame_size_filter.is_quiet(frame_size) {
+                if self.motion_filter.is_quiet(frame_size, nal_type, h264_data) {
                     consecutive_idle_count += 1;
                     self.frames_in_current_state += 1;
                     if self.frames_in_current_state % 100 == 0 {
@@ -553,8 +566,10 @@ impl RecordingStateMachine {
         frame: &TimestampedFrame,
         h264_data: &[u8],
     ) -> Option<RecordingState> {
+        let estimated_fps = self.fps_estimator.fps();
+        info!(estimated_fps, config_fps = self.config.fps, "H.264 segment using estimated FPS");
         let mut encoder =
-            match SegmentEncoder::start_passthrough(frame.captured_at_ms, self.config.fps).await {
+            match SegmentEncoder::start_passthrough(frame.captured_at_ms, estimated_fps).await {
                 Ok(e) => e,
                 Err(e) => {
                     error!(error = %e, "failed to spawn ffmpeg passthrough");
@@ -610,14 +625,29 @@ impl RecordingStateMachine {
                             "uploaded active segment to RustFS"
                         );
                         if let Some(db) = &self.db {
-                            if let Err(e) = db.insert_active(
+                            match db.insert_active(
                                 start_ms,
                                 end_ms,
                                 &key,
                                 size_bytes,
                                 seg.frame_count,
                             ) {
-                                error!(error = %e, key, "failed to insert active segment into SQLite");
+                                Ok(segment_id) => {
+                                    if let Some(ann) = &self.annotation_config {
+                                        crate::annotator::spawn_annotation(
+                                            Arc::clone(ann),
+                                            Arc::clone(&self.storage),
+                                            Arc::clone(db),
+                                            segment_id,
+                                            key.clone(),
+                                            start_ms,
+                                            end_ms,
+                                        );
+                                    }
+                                }
+                                Err(e) => {
+                                    error!(error = %e, key, "failed to insert active segment into SQLite");
+                                }
                             }
                         }
                     }
@@ -649,6 +679,7 @@ impl RecordingStateMachine {
                 if let Err(e) = db.insert_idle(idle_start_ms, idle_end_ms, &key, 0) {
                     error!(error = %e, "failed to insert H.264 idle record into SQLite");
                 }
+                // No annotation for H.264 idle — no stored object to send to the model.
             }
             return;
         }
@@ -666,11 +697,10 @@ impl RecordingStateMachine {
                     idle_start_ms, idle_end_ms, "uploaded idle frame to RustFS"
                 );
                 if let Some(db) = &self.db {
-                    if let Err(e) =
-                        db.insert_idle(idle_start_ms, idle_end_ms, &jpeg_key, jpeg_size)
-                    {
+                    if let Err(e) = db.insert_idle(idle_start_ms, idle_end_ms, &jpeg_key, jpeg_size) {
                         error!(error = %e, key = jpeg_key, "failed to insert idle record into SQLite");
                     }
+                    // No annotation for idle JPEGs — the video model cannot process still images.
                 }
             }
             Err(e) => {

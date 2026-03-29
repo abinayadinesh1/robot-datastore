@@ -24,6 +24,12 @@ aws-credential-types = "1"
 aws-types = "1"
 chrono = "0.4"
 libc = "0.2"
+uuid = { version = "1", features = ["v4"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+reqwest = { version = "0.12", features = ["json", "multipart", "rustls-tls"], default-features = false }
+tokio-stream = "0.1"
+sha2 = "0.10"
+futures = "0.3"
 
 [dev-dependencies]
 reqwest = { version = "0.12", features = ["blocking", "json", "rustls-tls"], default-features = false }
