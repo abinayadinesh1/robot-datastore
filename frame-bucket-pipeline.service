@@ -1,0 +1,14 @@
+[Unit]
+Description=Frame Bucket Pipeline
+After=network.target frame-bucket-api.service
+
+[Service]
+Type=simple
+User=abinaya
+WorkingDirectory=/home/abinaya/robot-datastore/frame-bucket
+ExecStart=/bin/bash -c 'source /home/abinaya/robot-datastore/frame-bucket/.env && exec /home/abinaya/robot-datastore/frame-bucket/target/release/frame-bucket-pipeline'
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,14 @@
+[Unit]
+Description=Stream Viewer GUI
+After=network.target
+
+[Service]
+Type=simple
+User=abinaya
+WorkingDirectory=/home/abinaya/robot-datastore/stream-viewer
+ExecStart=/usr/bin/python3 -m http.server 3000
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
