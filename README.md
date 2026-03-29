@@ -41,8 +41,6 @@ git clone https://github.com/abinayadinesh1/robot-datastore.git
 cd robot-datastore
 ```
 
-Edit `frame-bucket/config.toml` and add your robots under `[[robots]]` with the correct IPs and stream URLs.
-
 Start RustFS (local S3-compatible storage):
 ```bash
 cd frame-bucket && docker compose up -d
