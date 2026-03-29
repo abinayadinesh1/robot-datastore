@@ -9,12 +9,12 @@ cd "$REPO_DIR/frame-bucket"
 cargo build --release
 
 echo "Configuring system services..."
-for SERVICE in frame-bucket-api frame-bucket-pipeline stream-viewer; do
+for SERVICE_FILE in "$REPO_DIR/services/"*.service; do
     sed \
         -e "s|REPO_DIR|$REPO_DIR|g" \
         -e "s|INSTALL_USER|$INSTALL_USER|g" \
-        "$REPO_DIR/$SERVICE.service" \
-    | sudo tee "/etc/systemd/system/$SERVICE.service" > /dev/null
+        "$SERVICE_FILE" \
+    | sudo tee "/etc/systemd/system/$(basename "$SERVICE_FILE")" > /dev/null
 done
 
 sudo systemctl daemon-reload

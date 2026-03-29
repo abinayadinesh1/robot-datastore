@@ -6,13 +6,72 @@ The goal of the robot observatory is to provide a single place to monitor, contr
 
 ## Quick Start
 
+### Prerequisites
+
+Before running, make sure you have:
+
+- **Docker & Docker Compose** — for RustFS local storage
+- **Rust toolchain** (`cargo`) — to build the pipeline and API
+  ```bash
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+  ```
+- **ffmpeg** with libx264 support — for video segment encoding
+  ```bash
+  # Ubuntu/Debian
+  sudo apt install ffmpeg
+  # macOS
+  brew install ffmpeg
+  ```
+  Verify: `ffmpeg -encoders 2>/dev/null | grep libx264`
+- **Python 3** — for the stream viewer server and helper scripts
+- **AWS credentials** (optional) — only needed if you want frames evicted/archived to S3. Copy and fill in `frame-bucket/.env`:
+  ```bash
+  cp frame-bucket/.env.example frame-bucket/.env
+  # set AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_DEFAULT_REGION
+  ```
+- **A robot with a running camera daemon** reachable over your network:
+  - Reachy Mini: stream at `http://<ip>:8000/api/camera/stream`
+  - BracketBot: run `uv run camera_stream.py`, stream at `http://<ip>:8003/stream`
+  - Anything serving MJPEG or H.264 over HTTP/TCP works
+
+### Setup
+
 ```bash
 git clone https://github.com/abinayadinesh1/robot-datastore.git
 cd robot-datastore
+```
+
+Edit `frame-bucket/config.toml` and add your robots under `[[robots]]` with the correct IPs and stream URLs.
+
+Start RustFS (local S3-compatible storage):
+```bash
+cd frame-bucket && docker compose up -d
+```
+
+### Run (Linux — automated via systemd)
+
+```bash
 ./install.sh
 ```
 
-Builds the release target, configures three system services for your user and install path, and starts them. Navigate to **http://localhost:3000** to access the stream.
+Builds the release binary, installs three systemd services, and starts them. Navigate to **http://localhost:3000** to access the stream viewer.
+
+### Run (manual — macOS or without systemd)
+
+Run each component in a separate terminal:
+
+```bash
+# Terminal 1 — Pipeline (capture, filter, store)
+cd frame-bucket && source .env && RUST_LOG=info ./target/release/frame-bucket-pipeline
+
+# Terminal 2 — API server (playback, collections, clips)
+cd frame-bucket && RUST_LOG=info cargo run --release --package frame-bucket-api
+# Runs on http://localhost:8080
+
+# Terminal 3 — Stream Viewer (frontend)
+cd stream-viewer && python3 -m http.server 3000
+# Open http://localhost:3000
+```
 
 ---
 

@@ -1,0 +1,1 @@
+modal deploy qwen_modal.py
