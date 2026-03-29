@@ -8,11 +8,11 @@ The goal of the robot observatory is to provide a single place to monitor, contr
 
 ```bash
 git clone https://github.com/abinayadinesh1/robot-datastore.git
+cd robot-datastore
 ./install.sh
-# this builds the release target, sets up three system services (one for viewing the stream, the api, and the pipeline), and starts the services.
 ```
 
-Go to the specified port to access the stream!
+Builds the release target, configures three system services for your user and install path, and starts them. Navigate to **http://localhost:3000** to access the stream.
 
 ---
 
