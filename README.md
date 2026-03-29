@@ -58,7 +58,7 @@ api/src/
 
 ---
 
-## Pipeline
+## frame-bucket-pipeline
 
 This is doing the bulk of the work. The goal of the pipeline is to take images coming from various robots and filter them at the source, storing only useful information locally, then in the cloud. In pursuit of that, it completes various independent functions:
 
