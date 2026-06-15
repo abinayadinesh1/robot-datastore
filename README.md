@@ -1,6 +1,6 @@
 # Robot Observatory
 
-The goal of the robot observatory is to provide a single place to monitor, control, and use the memories of different robot embodiments. Official support means there is a stream daemon and control daemon written for the robot that lets you view its sensor streams and control its actuators from the stream-viewer. This is currently implemented for Reachy Mini and Bracket Bot. If you have a robot you want to add support to, write to the maintainers via this google form. This readme was handwritten!! 
+The goal of the robot observatory is to provide a single place to monitor, control, and use the memories of different robot embodiments. Official support means there is a stream daemon and control daemon written for the robot that lets you view its sensor streams and control its actuators from the stream-viewer. This is currently implemented for Reachy Mini and Bracket Bot. If you have a robot you want to add support to, write to the maintainers via this google form. 
 
 ---
 
