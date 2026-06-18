@@ -60,7 +60,7 @@ Run each component in a separate terminal:
 
 ```bash
 # Terminal 1 — Pipeline (capture, filter, store)
-cd frame-bucket && source .env && RUST_LOG=info ./target/release/frame-bucket-pipeline
+cd frame-bucket && source .env && RUST_LOG=info cargo run --release --package frame-bucket-pipeline
 
 # Terminal 2 — API server (playback, collections, clips)
 cd frame-bucket && RUST_LOG=info cargo run --release --package frame-bucket-api
@@ -79,7 +79,7 @@ The stream viewer does all the work to let the client easily interact with the r
 
 - Enables livestream viewing of sensor data. Is the robot up and healthy? Is it stuck on any tasks?
 - Ability to control robots via WASD or Teleoperation via a socket to the robot itself. 'Rescue'
-- Ability to dynamically configure the robot fleet (add and remove robots from the pipeline).
+- Ability to dynamically configure the robot fleet (add and remove robots from the pipeline) while the pipeline is still running
 - Enabling seamless playback of robot sensor data.
 - Ability to make 'datasets' or collections of sensor data, with captions. For example, to easily go over human demonstrator rollouts and pick and choose the episodes you want to turn into a dataset.
 
@@ -91,7 +91,7 @@ The stream viewer does all the work to let the client easily interact with the r
 
 ## frame-bucket-api
 
-This is the main API that lets the web client talk to the storage backend. It is the skeleton enabling video-playback, perusing through clips, downloading them, and getting live stats of video streams. The form follows function.
+This is the main API that lets the web client talk to the storage backend. It is the skeleton enabling video-playback, perusing through clips, downloading them, and getting live stats of video streams and active cameras. The form follows function.
 
 ```
 api/src/
